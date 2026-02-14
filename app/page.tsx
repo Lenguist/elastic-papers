@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
+import ReactMarkdown from "react-markdown";
 
 type Message = {
   role: "user" | "assistant" | "error" | "system";
@@ -16,12 +17,97 @@ export default function HomePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<"library" | "notes">("library");
+  const [libraryPapers, setLibraryPapers] = useState<Array<{
+    id: string;
+    title: string;
+    authors?: string[];
+    url?: string;
+  }>>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  // Extract papers from a message (arXiv links + optional markdown titles)
+  function extractPapersFromText(text: string): Array<{ id: string; title: string; url: string }> {
+    const papers: Array<{ id: string; title: string; url: string }> = [];
+    const seenIds = new Set<string>();
+
+    // 1. **Title** ([arXiv:ID](url)) or **Title** ([ID](url))
+    const titleLinkRegex = /\*\*([^*]+)\*\*\s*\(\[(?:arXiv:)?([0-9.]+)\]\((https?:\/\/arxiv\.org\/abs\/[0-9.]+)\)\)/gi;
+    let m;
+    while ((m = titleLinkRegex.exec(text)) !== null) {
+      if (!seenIds.has(m[2])) {
+        seenIds.add(m[2]);
+        papers.push({ id: m[2], title: m[1].trim(), url: m[3] });
+      }
+    }
+
+    // 2. [Title](https://arxiv.org/abs/ID)
+    const linkTitleRegex = /\[([^\]]+)\]\((https?:\/\/arxiv\.org\/abs\/([0-9.]+))\)/gi;
+    while ((m = linkTitleRegex.exec(text)) !== null) {
+      if (!seenIds.has(m[3])) {
+        seenIds.add(m[3]);
+        papers.push({ id: m[3], title: m[1].trim(), url: m[2] });
+      }
+    }
+
+    // 3. Bare arxiv URLs
+    const bareArxiv = text.match(/https?:\/\/arxiv\.org\/abs\/([0-9.]+)/g) || [];
+    bareArxiv.forEach(link => {
+      const idMatch = link.match(/([0-9.]+)$/);
+      if (idMatch && !seenIds.has(idMatch[1])) {
+        seenIds.add(idMatch[1]);
+        papers.push({
+          id: idMatch[1],
+          title: `arXiv:${idMatch[1]}`,
+          url: link,
+        });
+      }
+    });
+
+    return papers;
+  }
+
+  function saveMessageToLibrary(text: string) {
+    const newPapers = extractPapersFromText(text);
+    if (newPapers.length === 0) return;
+    (async () => {
+      try {
+        await fetch("/api/library", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ papers: newPapers }),
+        });
+        await fetchLibrary();
+      } catch {
+        // fallback: local state only
+        setLibraryPapers(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueNew = newPapers.filter(p => !existingIds.has(p.id));
+          return [...prev, ...uniqueNew];
+        });
+      }
+    })();
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  async function fetchLibrary() {
+    try {
+      const res = await fetch("/api/library");
+      const data = await res.json();
+      if (Array.isArray(data.papers)) setLibraryPapers(data.papers);
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    if (scopeDefined) fetchLibrary();
+  }, [scopeDefined]);
 
   function handleScopeSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,8 +131,14 @@ export default function HomePage() {
     setInput("");
     setMessages((m) => [...m, { role: "user", text }]);
     setLoading(true);
+    setLoadingStage("Connecting to agent...");
 
     try {
+      // Simulate stage progression
+      setTimeout(() => setLoadingStage("Searching papers..."), 500);
+      setTimeout(() => setLoadingStage("Analyzing results..."), 2000);
+      setTimeout(() => setLoadingStage("Generating response..."), 4000);
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -63,7 +155,16 @@ export default function HomePage() {
           { role: "error", text: data.error + (data.detail ? "\n" + data.detail.slice(0, 150) : "") },
         ]);
       } else {
-        setMessages((m) => [...m, { role: "assistant", text: data.response || "" }]);
+        // Ensure response is a string
+        const responseText = typeof data.response === 'string' 
+          ? data.response 
+          : typeof data.response === 'object' 
+            ? JSON.stringify(data.response, null, 2)
+            : String(data.response || "");
+        
+        setMessages((m) => [...m, { role: "assistant", text: responseText }]);
+        // Sync library in case the agent added papers via the add_to_library tool
+        fetchLibrary();
       }
     } catch (err) {
       setMessages((m) => [
@@ -72,6 +173,7 @@ export default function HomePage() {
       ]);
     } finally {
       setLoading(false);
+      setLoadingStage("");
     }
   }
 
@@ -238,40 +340,190 @@ export default function HomePage() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-900">
-      {/* Header with gradient */}
-      <div className="border-b border-pink-200 bg-gradient-to-r from-pink-500 to-fuchsia-500 px-6 py-4 shadow-lg dark:border-pink-900">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <div className="flex items-start gap-2">
-            <Image 
+    <div className="relative flex h-screen flex-col items-center justify-center overflow-hidden">
+      {/* Figma gradient background */}
+      <div 
+        className="absolute inset-0" 
+        style={{
+          background: 'linear-gradient(180deg, #E7ECF6 33%, #FFE073 67%, #D34EA1 100%)'
+        }}
+      ></div>
+      
+      {/* Noise overlay image */}
+      <div 
+        className="absolute left-0 top-0 h-full w-full"
+        style={{
+          backgroundImage: 'url(/gradient.png)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+      ></div>
+
+      {/* White overlay container - contains everything */}
+      <div
+        className="absolute flex flex-col"
+        style={{
+          left: 'calc(3.7vw)',
+          top: 'calc(5.7vh)',
+          right: 'calc(3.7vw)',
+          bottom: 'calc(5.7vh)',
+          background: '#FFFFFF',
+          borderRadius: '40px',
+        }}
+      >
+        {/* Header inside white container */}
+        <div className="flex items-center justify-between px-4 py-2">
+          {/* Left side - Logo and Title */}
+          <div className="flex items-start gap-3">
+            <img 
               src="/logo.png" 
               alt="logo" 
-              width={90} 
-              height={90} 
-              className="w-auto object-contain"
-              style={{ imageRendering: 'crisp-edges', height: 'auto', maxHeight: '80px' }}
+              style={{ height: '88px', width: 'auto', objectFit: 'contain' }}
             />
-            <h1 className="text-lg font-semibold text-white drop-shadow">research atelier</h1>
-            <p className="ml-2 text-sm text-white/90 drop-shadow-sm">
-              • {scopeInput}
-            </p>
+            <div style={{ marginTop: '8px' }}>
+              <h1 style={{ fontFamily: 'Lato', fontStyle: 'italic', fontWeight: 900, fontSize: '26px', color: '#AF247B' }}>
+                <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)' }}>
+                  research
+                </span>
+                {' '}
+                <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)' }}>
+                  atelier
+                </span>
+              </h1>
+            </div>
           </div>
-          <button
-            onClick={() => {
-              setScopeDefined(false);
-              setMessages([]);
-              setScopeInput("");
-            }}
-            className="rounded-lg border border-white/30 bg-white/20 px-3 py-1.5 text-sm text-white backdrop-blur-sm hover:bg-white/30"
-          >
-            Change Scope
-          </button>
-        </div>
-      </div>
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-4xl px-6 py-8">
+          {/* Right side - Scope tag and button */}
+          <div className="flex items-center gap-3" style={{ marginTop: '-20px', marginRight: '20px' }}>
+            {/* Scope tag */}
+            <div
+              className="flex items-center gap-2 px-5 py-2"
+              style={{
+                background: 'rgba(196, 210, 237, 0.3)',
+                border: '1px solid #E5E5E5',
+                borderRadius: '40px',
+              }}
+            >
+              <div
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: '#AF247B',
+                }}
+              ></div>
+              <span style={{
+                fontFamily: 'Lato',
+                fontStyle: 'normal',
+                fontWeight: 400,
+                fontSize: '18px',
+                lineHeight: '22px',
+                textAlign: 'center',
+                color: '#231F1F',
+              }}>{scopeInput}</span>
+            </div>
+            
+            <button
+              onClick={() => {
+                setScopeDefined(false);
+                setMessages([]);
+                setScopeInput("");
+              }}
+              className="rounded-lg bg-white px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+              style={{
+                border: '1px solid #E5E5E5',
+              }}
+            >
+              Change Scope
+            </button>
+          </div>
+        </div>
+
+        {/* Messages Area - split into two halves */}
+        <div className="flex flex-1 gap-6 overflow-hidden px-8 pb-6" style={{ marginTop: '-40px' }}>
+          {/* Left half - Library/Notes tabs */}
+          <div className="flex flex-1 flex-col">
+            {/* Tabs - browser style with close buttons */}
+            <div className="flex gap-0 border-b border-pink-600" style={{ marginBottom: '-1px' }}>
+              <button
+                onClick={() => setActiveTab("library")}
+                className="flex items-center gap-2 border border-b-0 border-pink-600 bg-white px-4 py-1.5 text-sm"
+                style={{
+                  background: activeTab === "library" ? "#FFF" : "transparent",
+                }}
+              >
+                <span>Library</span>
+                <span className="text-xs" style={{ color: '#AF247B' }}>x</span>
+              </button>
+              <button
+                onClick={() => setActiveTab("notes")}
+                className="flex items-center gap-2 border border-b-0 border-l-0 border-pink-600 bg-white px-4 py-1.5 text-sm"
+                style={{
+                  background: activeTab === "notes" ? "#FFF" : "transparent",
+                }}
+              >
+                <span>Notes</span>
+                <span className="text-xs" style={{ color: '#AF247B' }}>x</span>
+              </button>
+            </div>
+            
+            {/* Tab content with border */}
+            <div className="flex-1 overflow-y-auto border border-pink-600 p-4">
+              {activeTab === "library" && (
+                <div className="space-y-3">
+                  {libraryPapers.length === 0 ? (
+                    <p className="text-sm text-zinc-500">No papers yet. Ask the AI to find papers on your topic.</p>
+                  ) : (
+                    libraryPapers.map((paper) => (
+                      <div
+                        key={paper.id}
+                        className="rounded-lg border border-zinc-200 bg-white p-3 hover:border-pink-300 hover:bg-pink-50"
+                      >
+                        <a
+                          href={paper.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm font-medium text-zinc-900 hover:text-pink-600"
+                        >
+                          {paper.title}
+                        </a>
+                        <p className="mt-1 text-xs text-zinc-500">arXiv:{paper.id}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              
+              {activeTab === "notes" && (
+                <div>
+                  <p className="text-sm text-zinc-500">Notes feature coming soon...</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right half - AI Search */}
+          <div className="relative flex flex-1 flex-col" style={{ marginTop: '40px' }}>
+            {/* Blurred background layer - extends beyond bounds for soft edges */}
+            <div 
+              className="absolute"
+              style={{
+                left: '-20px',
+                right: '-20px', 
+                top: '-30px',
+                bottom: '-20px',
+                background: '#FFFBEC',
+                boxShadow: '0px 4px 4px rgba(0, 0, 0, 0.25)',
+                borderRadius: '40px',
+                filter: 'blur(15px)',
+              }}
+            ></div>
+            
+            {/* Content layer (sharp) */}
+            <div 
+              className="relative z-10 flex flex-1 flex-col overflow-hidden"
+            >
+            <div className="flex-1 overflow-y-auto p-6">
           {messages.length === 0 && (
             <div className="space-y-4 text-center">
               <div className="text-4xl">💬</div>
@@ -315,9 +567,41 @@ export default function HomePage() {
                     <span className="text-sm">🤖</span>
                   </div>
                   <div className="max-w-[80%] rounded-2xl bg-white px-5 py-3 shadow-sm dark:bg-zinc-950">
-                    <p className="text-sm leading-relaxed text-zinc-900 dark:text-zinc-100 whitespace-pre-wrap">
-                      {msg.text}
-                    </p>
+                    <div className="prose prose-sm max-w-none text-zinc-900 dark:text-zinc-100 dark:prose-invert">
+                      <ReactMarkdown
+                        components={{
+                          a: ({ node, ...props }) => (
+                            <a
+                              {...props}
+                              className="text-pink-600 hover:underline dark:text-pink-400"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            />
+                          ),
+                          h2: ({ node, ...props }) => (
+                            <h2 {...props} className="mt-4 mb-2 text-base font-semibold" />
+                          ),
+                          ul: ({ node, ...props }) => (
+                            <ul {...props} className="space-y-2 my-2" />
+                          ),
+                          li: ({ node, ...props }) => (
+                            <li {...props} className="text-sm" />
+                          ),
+                        }}
+                      >
+                        {msg.text}
+                      </ReactMarkdown>
+                    </div>
+                    {extractPapersFromText(msg.text).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => saveMessageToLibrary(msg.text)}
+                        className="mt-3 flex items-center gap-2 rounded-lg border border-pink-300 bg-pink-50 px-3 py-2 text-sm font-medium text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-950/40 dark:text-pink-300 dark:hover:bg-pink-950/60"
+                      >
+                        <span>Save to library</span>
+                        <span className="text-xs">({extractPapersFromText(msg.text).length} papers)</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -339,64 +623,70 @@ export default function HomePage() {
           ))}
 
           {loading && (
-            <div className="flex items-center space-x-2">
+            <div className="flex items-start space-x-3">
               <div className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-200 dark:bg-zinc-800">
                 <span className="text-sm">🤖</span>
               </div>
-              <div className="flex space-x-2">
-                <div className="h-2 w-2 animate-pulse rounded-full bg-zinc-400"></div>
-                <div className="h-2 w-2 animate-pulse rounded-full bg-zinc-400 delay-75"></div>
-                <div className="h-2 w-2 animate-pulse rounded-full bg-zinc-400 delay-150"></div>
+              <div className="flex flex-col">
+                <div className="flex space-x-2">
+                  <div className="h-2 w-2 animate-pulse rounded-full bg-zinc-400"></div>
+                  <div className="h-2 w-2 animate-pulse rounded-full bg-zinc-400 delay-75"></div>
+                  <div className="h-2 w-2 animate-pulse rounded-full bg-zinc-400 delay-150"></div>
+                </div>
+                <p className="mt-2 text-xs text-zinc-500">{loadingStage}</p>
               </div>
             </div>
           )}
 
           <div ref={bottomRef} />
-        </div>
-      </div>
+            </div>
 
-      {/* Input Area */}
-      <div className="border-t border-zinc-200 bg-white px-6 py-4 dark:border-zinc-800 dark:bg-zinc-950">
-        <form onSubmit={handleChatSubmit} className="mx-auto max-w-4xl">
-          <div className="relative">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about papers, trends, or related research..."
-              disabled={loading}
-              className="w-full rounded-xl border border-zinc-300 bg-white px-5 py-4 pr-14 text-sm shadow-sm focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:focus:border-pink-400"
-            />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-gradient-to-r from-pink-600 to-fuchsia-600 p-2.5 text-white shadow-lg hover:from-pink-700 hover:to-fuchsia-700 disabled:opacity-50 disabled:hover:from-pink-600 disabled:hover:to-fuchsia-600"
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                />
-              </svg>
-            </button>
+            {/* Input Area - inside AI search container */}
+            <div className="border-t border-zinc-200/50 px-6 py-4">
+              <form onSubmit={handleChatSubmit} className="mx-auto max-w-4xl">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Ask about papers, trends, or related research..."
+                    disabled={loading}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-5 py-4 pr-14 text-sm shadow-sm focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-500/20 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:focus:border-pink-400"
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading || !input.trim()}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-gradient-to-r from-pink-600 to-fuchsia-600 p-2.5 text-white shadow-lg hover:from-pink-700 hover:to-fuchsia-700 disabled:opacity-50 disabled:hover:from-pink-600 disabled:hover:to-fuchsia-600"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                      />
+                    </svg>
+                  </button>
+                </div>
+                <p className="mt-2 text-center text-xs text-zinc-500">
+                  Or{" "}
+                  <Link
+                    href="/reader/2401.04088"
+                    className="text-pink-600 hover:underline dark:text-pink-400"
+                  >
+                    open a specific paper
+                  </Link>
+                </p>
+              </form>
+            </div>
+            </div>
           </div>
-          <p className="mt-2 text-center text-xs text-zinc-500">
-            Or{" "}
-            <Link
-              href="/reader/2401.04088"
-              className="text-pink-600 hover:underline dark:text-pink-400"
-            >
-              open a specific paper
-            </Link>
-          </p>
-        </form>
+        </div>
       </div>
     </div>
   );

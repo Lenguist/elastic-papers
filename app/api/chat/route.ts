@@ -38,11 +38,36 @@ export async function POST(req: NextRequest) {
   }
 
   const data = (await res.json()) as Record<string, unknown>;
-  const out = data.output as Record<string, unknown> | undefined;
-  const text =
-    (typeof out === "object" && out && typeof out.content === "string"
-      ? out.content
-      : (data.response as string)) || String(data);
+  
+  // Try to extract text from various possible response structures
+  let text = "";
+  
+  // Check for response.message field (nested structure)
+  if (typeof data.response === "object" && data.response) {
+    const resp = data.response as Record<string, unknown>;
+    if (typeof resp.message === "string") {
+      text = resp.message;
+    }
+  }
+  // Check for message field (Agent Builder format)
+  else if (typeof data.message === "string") {
+    text = data.message;
+  }
+  // Check for output.content field
+  else if (typeof data.output === "object" && data.output) {
+    const out = data.output as Record<string, unknown>;
+    if (typeof out.content === "string") {
+      text = out.content;
+    }
+  }
+  // Check for response as string
+  else if (typeof data.response === "string") {
+    text = data.response;
+  }
+  // Fallback to stringifying the whole response
+  else {
+    text = JSON.stringify(data, null, 2);
+  }
 
   return NextResponse.json({ response: text });
 }
