@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -38,12 +39,12 @@ export default function HomePage() {
 
       <p className="mt-6 text-sm text-zinc-500">
         Or try{" "}
-        <a
+        <Link
           href="/reader/2401.04088"
           className="text-blue-600 hover:underline dark:text-blue-400"
         >
           a sample paper
-        </a>
+        </Link>
       </p>
     </div>
   );

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import ChatSidebar from "@/components/ChatSidebar";
 
@@ -14,9 +15,9 @@ export default function ReaderPage() {
       {/* Main: PDF viewer */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center gap-3 border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
-          <a href="/" className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-400">
+          <Link href="/" className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-400">
             ← Back
-          </a>
+          </Link>
           {arxivId && (
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               arXiv:{arxivId}
