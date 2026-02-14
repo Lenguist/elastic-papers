@@ -30,6 +30,10 @@ load_dotenv()
 
 # --- Elasticsearch connection ---
 
+# Use scripts/create_index.py to create indices from CLI
+INDEX_NAME = os.getenv("ES_INDEX", "arxiv-papers-2026")
+
+
 def _get_es_client() -> Elasticsearch:
     cloud_id = os.getenv("ELASTICSEARCH_CLOUD_ID")
     url = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
@@ -212,28 +216,21 @@ def filter_2026(docs: list[dict]) -> list[dict]:
 
 # --- Main ---
 
-INDEX_NAME = "arxiv-papers-2026"
-
 
 def ensure_index(es: Elasticsearch):
-    """Create index if it doesn't exist."""
+    """Create basic index if it doesn't exist. For semantic index, use: python scripts/create_index.py semantic"""
     if es.indices.exists(index=INDEX_NAME):
         return
-    es.indices.create(
-        index=INDEX_NAME,
-        body={
-            "mappings": {
-                "properties": {
-                    "arxiv_id": {"type": "keyword"},
-                    "title": {"type": "text"},
-                    "authors": {"type": "keyword"},
-                    "abstract": {"type": "text"},
-                    "categories": {"type": "keyword"},
-                    "created": {"type": "date", "format": "yyyy-MM-dd||yyyy-MM-dd'T'HH:mm:ss'Z'||strict_date_optional_time"},
-                }
-            }
-        },
-    )
+    # Basic mapping (no semantic_text); use create_index.py semantic for that
+    mapping = {
+        "arxiv_id": {"type": "keyword"},
+        "title": {"type": "text"},
+        "authors": {"type": "keyword"},
+        "abstract": {"type": "text"},
+        "categories": {"type": "keyword"},
+        "created": {"type": "date", "format": "yyyy-MM-dd||yyyy-MM-dd'T'HH:mm:ss'Z'||strict_date_optional_time"},
+    }
+    es.indices.create(index=INDEX_NAME, mappings={"properties": mapping})
     print(f"Created index '{INDEX_NAME}'")
 
 

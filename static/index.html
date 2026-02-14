@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>arXiv Research Assistant</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    .subtitle { color: #666; font-size: 0.875rem; margin-bottom: 1.5rem; }
+    #messages { min-height: 200px; max-height: 60vh; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; background: #f9f9f9; }
+    .msg { margin-bottom: 1rem; }
+    .msg.user { color: #0366d6; }
+    .msg.assistant { color: #333; white-space: pre-wrap; }
+    .msg.error { color: #cb2431; }
+    form { display: flex; gap: 0.5rem; }
+    input { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 6px; }
+    button { padding: 0.5rem 1rem; background: #0366d6; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #0256c2; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>arXiv Research Assistant</h1>
+  <p class="subtitle">Ask about 2026 papers. Powered by Elastic Agent Builder.</p>
+
+  <div id="messages"></div>
+
+  <form id="form">
+    <input id="input" type="text" placeholder="e.g. What papers discuss transformers?" autocomplete="off" />
+    <button type="submit" id="submit">Send</button>
+  </form>
+
+  <script>
+    const messages = document.getElementById('messages');
+    const form = document.getElementById('form');
+    const input = document.getElementById('input');
+    const submit = document.getElementById('submit');
+
+    function addMsg(role, text) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+
+      addMsg('user', text);
+      input.value = '';
+      submit.disabled = true;
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          addMsg('error', data.error + (data.detail ? '\n' + data.detail.slice(0, 200) : ''));
+        } else {
+          addMsg('assistant', data.response || JSON.stringify(data));
+        }
+      } catch (err) {
+        addMsg('error', 'Request failed: ' + err.message);
+      }
+
+      submit.disabled = false;
+    });
+  </script>
+</body>
+</html>
