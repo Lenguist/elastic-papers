@@ -1,8 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getLibrary } from "@/lib/library-store";
 
 const KIBANA_URL = process.env.KIBANA_URL?.replace(/\/$/, "");
 const KIBANA_API_KEY = process.env.KIBANA_API_KEY;
 const AGENT_ID = process.env.AGENT_ID || "basic-arxiv-assistant";
+
+function buildLibraryContext(): string {
+  const papers = getLibrary();
+  if (papers.length === 0) return "";
+  const lines = papers.map((p, i) => {
+    const num = i + 1;
+    const meta = [
+      `Title: ${p.title}`,
+      `arXiv ID: ${p.id}`,
+      p.abstract ? `Abstract: ${p.abstract}` : "",
+      p.authors?.length ? `Authors: ${p.authors.join(", ")}` : "",
+      p.pdfUrl ? `PDF: ${p.pdfUrl}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return `--- Paper ${num} ---\n${meta}`;
+  });
+  return (
+    "The user's library contains the following papers. Use this to answer questions about papers in their library, compare them, or summarize.\n\n" +
+    lines.join("\n\n") +
+    "\n\n"
+  );
+}
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -18,6 +42,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const libraryContext = buildLibraryContext();
+  const inputToAgent =
+    libraryContext.length > 0
+      ? `${libraryContext}User question: ${message}`
+      : message;
+
   const url = `${KIBANA_URL}/api/agent_builder/converse`;
   const res = await fetch(url, {
     method: "POST",
@@ -26,7 +56,7 @@ export async function POST(req: NextRequest) {
       "kbn-xsrf": "true",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ input: message, agent_id: AGENT_ID }),
+    body: JSON.stringify({ input: inputToAgent, agent_id: AGENT_ID }),
   });
 
   if (!res.ok) {

@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getLibrary, addPapers, type LibraryPaper } from "@/lib/library-store";
+import { getLibrary, addPapers, updatePaperContent, type LibraryPaper } from "@/lib/library-store";
+import { fetchArxivPaper } from "@/lib/arxiv";
 
 export type { LibraryPaper };
 
 export async function GET() {
   return NextResponse.json({ papers: getLibrary() });
+}
+
+/** Enrich library papers with abstract and authors from arXiv (background, non-blocking). */
+function enrichPapersInBackground(arxivIds: string[]) {
+  void Promise.all(
+    arxivIds.map(async (id) => {
+      const meta = await fetchArxivPaper(id);
+      if (meta) {
+        updatePaperContent(id, {
+          abstract: meta.abstract,
+          authors: meta.authors,
+          pdfUrl: meta.pdfUrl,
+        });
+      }
+    })
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -24,6 +41,9 @@ export async function POST(req: NextRequest) {
   }
 
   const { added, total } = addPapers(papers);
+  if (added.length > 0) {
+    enrichPapersInBackground(added.map((p) => p.id));
+  }
   return NextResponse.json({
     added: added.length,
     total,

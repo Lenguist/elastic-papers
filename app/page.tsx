@@ -24,6 +24,8 @@ export default function HomePage() {
     title: string;
     authors?: string[];
     url?: string;
+    abstract?: string;
+    pdfUrl?: string;
   }>>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -108,6 +110,11 @@ export default function HomePage() {
   useEffect(() => {
     if (scopeDefined) fetchLibrary();
   }, [scopeDefined]);
+
+  // Refetch library when switching to Library tab so we get updated abstracts/PDF links
+  useEffect(() => {
+    if (scopeDefined && activeTab === "library") fetchLibrary();
+  }, [scopeDefined, activeTab]);
 
   function handleScopeSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -480,7 +487,7 @@ export default function HomePage() {
                         className="rounded-lg border border-zinc-200 bg-white p-3 hover:border-pink-300 hover:bg-pink-50"
                       >
                         <a
-                          href={paper.url}
+                          href={paper.url ?? `https://arxiv.org/abs/${paper.id}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm font-medium text-zinc-900 hover:text-pink-600"
@@ -488,6 +495,21 @@ export default function HomePage() {
                           {paper.title}
                         </a>
                         <p className="mt-1 text-xs text-zinc-500">arXiv:{paper.id}</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <a
+                            href={paper.pdfUrl ?? `https://arxiv.org/pdf/${paper.id}.pdf`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-medium text-pink-600 hover:underline"
+                          >
+                            PDF
+                          </a>
+                        </div>
+                        {paper.abstract && (
+                          <p className="mt-2 line-clamp-2 text-xs text-zinc-600" title={paper.abstract}>
+                            {paper.abstract}
+                          </p>
+                        )}
                       </div>
                     ))
                   )}
@@ -539,6 +561,9 @@ export default function HomePage() {
                   "Show me influential papers",
                   "Compare different approaches",
                   "Find papers related to...",
+                  ...(libraryPapers.length > 0
+                    ? ["Summarize the papers in my library", "What do my library papers have in common?"]
+                    : []),
                 ].map((suggestion, i) => (
                   <button
                     key={i}
