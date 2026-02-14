@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   title: "research atelier",
   description: "arXiv research assistant with semantic search",
   icons: {
-    icon: '/logo.png',
+    icon: '/favicon.png',
   },
 };
 
