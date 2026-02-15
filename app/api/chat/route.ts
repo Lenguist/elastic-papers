@@ -7,11 +7,15 @@ import { createNote } from "@/lib/notes";
 import type { LibraryPaper } from "@/lib/library-store";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4o";
 
 // Kibana Agent Builder (for "deep research" tool)
 const KIBANA_URL = process.env.KIBANA_URL?.replace(/\/$/, "");
 const KIBANA_API_KEY = process.env.KIBANA_API_KEY;
 const AGENT_ID = process.env.AGENT_ID || "basic-arxiv-assistant";
+
+// Modal deployment endpoint
+const MODAL_ENDPOINT_URL = process.env.MODAL_ENDPOINT_URL;
 
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
@@ -131,6 +135,45 @@ function buildTools(projectId: string): OpenAI.Chat.Completions.ChatCompletionTo
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "deploy_paper_demo",
+        description:
+          "Deploy and run a paper's code in a cloud sandbox (Modal). " +
+          "This spins up a container, clones the GitHub repo, and uses an AI coding agent (Claude) " +
+          "to read the README, install dependencies, debug issues, and get the code running. " +
+          "Use this when the user asks to 'run this paper's code', 'get this demo working', 'try running the code', etc. " +
+          "The agent will attempt to get the code running and report back with results or explain why it couldn't. " +
+          "This can take 1-5 minutes. Tell the user it's working before calling this tool.",
+        parameters: {
+          type: "object",
+          properties: {
+            repo_url: {
+              type: "string",
+              description:
+                "The GitHub repository URL to deploy (e.g. 'https://github.com/user/repo'). " +
+                "If you know the repo URL from the paper's code links, use it directly. " +
+                "If you don't have it, check the paper's metadata or ask the user.",
+            },
+            paper_id: {
+              type: "string",
+              description:
+                "The arXiv ID of the paper whose code to deploy. " +
+                "If provided without repo_url, the system will look up the paper's GitHub link from the library.",
+            },
+            task: {
+              type: "string",
+              description:
+                "Optional specific instructions for the deployment agent, e.g. " +
+                "'Run the inference demo on the test dataset' or 'Start the Gradio UI'. " +
+                "If not provided, the agent will follow the README.",
+            },
+          },
+          required: [],
+        },
+      },
+    },
   ];
 }
 
@@ -226,6 +269,66 @@ async function executeDeepResearch(question: string): Promise<string> {
     model_usage: data.model_usage,
     time_to_last_token: data.time_to_last_token,
   });
+}
+
+async function executeDeployPaperDemo(
+  projectId: string,
+  repoUrl?: string,
+  paperId?: string,
+  task?: string
+): Promise<string> {
+  if (!MODAL_ENDPOINT_URL) {
+    return JSON.stringify({
+      error: "Modal deployment not configured. Set MODAL_ENDPOINT_URL in env.",
+    });
+  }
+
+  // Call our own deploy-demo API route which handles resolution + Modal call
+  const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || "http://localhost:3000";
+  const apiUrl = `${baseUrl}/api/deploy-demo`;
+
+  const body: Record<string, string> = {};
+  if (repoUrl) body.repo_url = repoUrl;
+  if (paperId) body.paper_id = paperId;
+  if (projectId) body.project_id = projectId;
+  if (task) body.task = task;
+
+  try {
+    console.log(`  🚀 Deploying paper demo: ${repoUrl || paperId}`);
+    const res = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      return JSON.stringify({
+        error: data.error || `Deploy API returned ${res.status}`,
+        detail: data.detail || "",
+      });
+    }
+
+    // Return a summary the orchestrator can present nicely
+    return JSON.stringify({
+      status: data.status,
+      summary: data.summary,
+      repo_url: data.repo_url,
+      step_count: data.step_count,
+      elapsed_seconds: data.elapsed_seconds,
+      // Include a few key steps for the orchestrator's context
+      key_steps: (data.steps || []).slice(-5).map((s: Record<string, unknown>) => ({
+        command: s.command,
+        exit_code: s.exit_code,
+      })),
+    });
+  } catch (err) {
+    return JSON.stringify({
+      error: "Failed to call deploy-demo API",
+      detail: (err as Error).message?.slice(0, 300),
+    });
+  }
 }
 
 async function executeSaveToNotes(projectId: string, content: string, paperId?: string): Promise<string> {
@@ -342,6 +445,14 @@ async function executeTool(
     case "save_to_notes":
       result = await executeSaveToNotes(projectId, args.content as string, args.paper_id as string | undefined);
       break;
+    case "deploy_paper_demo":
+      result = await executeDeployPaperDemo(
+        projectId,
+        args.repo_url as string | undefined,
+        args.paper_id as string | undefined,
+        args.task as string | undefined
+      );
+      break;
     default:
       result = JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -379,6 +490,7 @@ TOOLS:
 - get_paper_details: Get abstract and metadata for a specific paper by arXiv ID.
 - deep_research: Thorough search via Elastic Agent Builder (10-15s). Only when asked or regular search fails.
 - save_to_notes: Save content to the user's project notes. Optionally link to a specific paper by arXiv ID. Use when the user asks to save, record, or write down findings, comparisons, summaries, or analysis.
+- deploy_paper_demo: Run a paper's code in a cloud sandbox (Modal). An AI coding agent (Claude) will clone the repo, read the README, install deps, and try to get the code running. Takes 1-5 minutes. Use when the user asks to "run this code", "get this demo working", "try the paper's code", etc.
 
 WHEN TO USE WHICH TOOL:
 - "Find papers about X" → search_papers (discover new papers)
@@ -388,6 +500,7 @@ WHEN TO USE WHICH TOOL:
 - "Summarize the methods in my library" → search_library_papers
 - "Save this to my notes" → save_to_notes
 - "What's the state of the art in X?" → search_papers first, maybe search_library_papers if library has relevant papers
+- "Run this paper's code" / "Get the demo working" → deploy_paper_demo (tell the user it will take a few minutes, then call the tool)
 
 GUIDELINES:
 - When citing papers, ALWAYS format as: **[Full Title](https://arxiv.org/abs/ARXIV_ID)**
@@ -466,15 +579,15 @@ export async function POST(req: NextRequest) {
   try {
     // Tool-use loop: call OpenAI, execute tools, feed results back, repeat
     let response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: CHAT_MODEL,
       messages,
       tools,
       tool_choice: "auto",
-      max_tokens: 2000,
+      max_tokens: 4096,
     });
 
     let loopCount = 0;
-    const MAX_LOOPS = 5;
+    const MAX_LOOPS = 8;
 
     while (response.choices[0]?.finish_reason === "tool_calls" && loopCount < MAX_LOOPS) {
       loopCount++;
@@ -498,7 +611,7 @@ export async function POST(req: NextRequest) {
 
       // Call OpenAI again with tool results
       response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: CHAT_MODEL,
         messages,
         tools,
         tool_choice: "auto",

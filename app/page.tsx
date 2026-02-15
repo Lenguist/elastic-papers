@@ -77,6 +77,19 @@ function HomePageInner() {
   const [addNoteOpenForPaper, setAddNoteOpenForPaper] = useState<Set<string>>(new Set());
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteContent, setEditingNoteContent] = useState("");
+  // Modal deploy state: maps repo URL → status
+  const [deployStatus, setDeployStatus] = useState<Record<string, {
+    loading: boolean;
+    result?: {
+      status: string;
+      summary: string;
+      steps?: Array<{ step: number; command: string; exit_code: number; output: string }>;
+      step_count?: number;
+      elapsed_seconds?: number;
+    };
+    error?: string;
+  }>>({});
+  const [expandedDeploy, setExpandedDeploy] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -308,6 +321,27 @@ function HomePageInner() {
       for (const m of matches) addLink(paper, m);
     }
     setCodeLinks(links);
+  }
+
+  async function handleDeployDemo(repoUrl: string) {
+    if (deployStatus[repoUrl]?.loading) return;
+    setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: true } }));
+    setExpandedDeploy(repoUrl);
+    try {
+      const res = await fetch("/api/deploy-demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_url: repoUrl, project_id: projectId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: false, error: data.error || "Deploy failed" } }));
+      } else {
+        setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: false, result: data } }));
+      }
+    } catch (err) {
+      setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: false, error: (err as Error).message } }));
+    }
   }
 
   useEffect(() => {
@@ -1265,26 +1299,135 @@ function HomePageInner() {
                             <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 line-clamp-1">
                               {title}
                             </h3>
-                            {links.map((link) => (
-                              <a
-                                key={link.url}
-                                href={link.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-3 rounded-lg border border-zinc-200 bg-white p-3 transition-colors hover:border-pink-200 hover:bg-pink-50/50"
-                              >
-                                <svg className="h-5 w-5 flex-shrink-0 text-zinc-700" viewBox="0 0 24 24" fill="currentColor">
-                                  <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                                </svg>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-medium text-zinc-800">{link.repoName}</p>
-                                  <p className="truncate text-xs text-zinc-400">{link.url}</p>
+                            {links.map((link) => {
+                              const ds = deployStatus[link.url];
+                              const isExpanded = expandedDeploy === link.url;
+                              return (
+                              <div key={link.url} className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <a
+                                    href={link.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex flex-1 items-center gap-3 rounded-lg border border-zinc-200 bg-white p-3 transition-colors hover:border-pink-200 hover:bg-pink-50/50"
+                                  >
+                                    <svg className="h-5 w-5 flex-shrink-0 text-zinc-700" viewBox="0 0 24 24" fill="currentColor">
+                                      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                                    </svg>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-medium text-zinc-800">{link.repoName}</p>
+                                      <p className="truncate text-xs text-zinc-400">{link.url}</p>
+                                    </div>
+                                    <svg className="h-4 w-4 flex-shrink-0 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                    </svg>
+                                  </a>
+                                  <button
+                                    onClick={() => handleDeployDemo(link.url)}
+                                    disabled={ds?.loading}
+                                    className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-green-300 bg-green-50 px-3 py-2.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-wait disabled:opacity-60"
+                                    title="Run this code in a cloud sandbox using Modal + Claude"
+                                  >
+                                    {ds?.loading ? (
+                                      <>
+                                        <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                        </svg>
+                                        Running...
+                                      </>
+                                    ) : ds?.result ? (
+                                      <>
+                                        {ds.result.status === "success" ? "Done" : "Retry"}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Run on Modal
+                                      </>
+                                    )}
+                                  </button>
                                 </div>
-                                <svg className="h-4 w-4 flex-shrink-0 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                </svg>
-                              </a>
-                            ))}
+
+                                {/* Deploy loading indicator */}
+                                {ds?.loading && (
+                                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                                    <div className="flex items-center gap-2">
+                                      <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                      </svg>
+                                      <span className="font-medium">AI agent is working...</span>
+                                    </div>
+                                    <p className="mt-1 text-amber-600">
+                                      Claude is reading the README, installing dependencies, and trying to run the code. This typically takes 1-5 minutes.
+                                    </p>
+                                  </div>
+                                )}
+
+                                {/* Deploy error */}
+                                {ds?.error && (
+                                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                                    <p className="font-medium">Deploy failed</p>
+                                    <p className="mt-1">{ds.error}</p>
+                                  </div>
+                                )}
+
+                                {/* Deploy result */}
+                                {ds?.result && (
+                                  <div className={`rounded-lg border p-3 text-xs ${
+                                    ds.result.status === "success"
+                                      ? "border-green-200 bg-green-50 text-green-800"
+                                      : ds.result.status === "max_steps_reached"
+                                      ? "border-amber-200 bg-amber-50 text-amber-800"
+                                      : "border-red-200 bg-red-50 text-red-800"
+                                  }`}>
+                                    <div className="flex items-center justify-between">
+                                      <p className="font-medium">
+                                        {ds.result.status === "success" ? "Completed" :
+                                         ds.result.status === "max_steps_reached" ? "Partial (hit step limit)" : "Failed"}
+                                        {ds.result.step_count && ` — ${ds.result.step_count} steps`}
+                                        {ds.result.elapsed_seconds && ` in ${ds.result.elapsed_seconds}s`}
+                                      </p>
+                                      <button
+                                        onClick={() => setExpandedDeploy(isExpanded ? null : link.url)}
+                                        className="text-xs underline opacity-70 hover:opacity-100"
+                                      >
+                                        {isExpanded ? "Collapse" : "Show details"}
+                                      </button>
+                                    </div>
+                                    <p className="mt-1 whitespace-pre-wrap">{ds.result.summary?.slice(0, 500)}</p>
+
+                                    {isExpanded && ds.result.steps && ds.result.steps.length > 0 && (
+                                      <div className="mt-3 space-y-2 border-t border-current/10 pt-3">
+                                        <p className="font-medium opacity-70">Agent steps:</p>
+                                        <div className="max-h-64 overflow-y-auto space-y-1.5">
+                                          {ds.result.steps.map((step, i) => (
+                                            <div key={i} className="rounded bg-black/5 p-2 font-mono text-[10px]">
+                                              <div className="flex items-center gap-2">
+                                                <span className={step.exit_code === 0 ? "text-green-600" : "text-red-600"}>
+                                                  {step.exit_code === 0 ? "OK" : `exit ${step.exit_code}`}
+                                                </span>
+                                                <span className="font-medium">$ {step.command}</span>
+                                              </div>
+                                              {step.output && (
+                                                <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap opacity-70">
+                                                  {step.output.slice(0, 500)}
+                                                </pre>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              );
+                            })}
                           </section>
                         ));
                       })()}
