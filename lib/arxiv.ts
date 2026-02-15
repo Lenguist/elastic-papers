@@ -11,6 +11,7 @@ export type ArxivPaperMeta = {
 };
 
 const ARXIV_QUERY = "http://export.arxiv.org/api/query?id_list=";
+const ARXIV_LIST = "http://export.arxiv.org/api/query";
 
 function stripTags(s: string): string {
   return s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
@@ -62,5 +63,56 @@ export async function fetchArxivPaper(arxivId: string): Promise<ArxivPaperMeta |
     };
   } catch {
     return null;
+  }
+}
+
+/** Parse one <entry> block from Atom XML into ArxivPaperMeta. */
+function parseEntry(entryXml: string): ArxivPaperMeta | null {
+  const idMatch = entryXml.match(/<id>[\s\S]*?arxiv\.org\/abs\/([0-9.]+)[\s\S]*?<\/id>/);
+  const id = idMatch ? idMatch[1] : "";
+  if (!id) return null;
+  const titleMatch = entryXml.match(/<title[^>]*>([\s\S]*?)<\/title>/);
+  const summaryMatch = entryXml.match(/<summary[^>]*>([\s\S]*?)<\/summary>/);
+  const title = titleMatch
+    ? decodeEntities(stripTags(titleMatch[1]))
+    : `arXiv:${id}`;
+  const abstract = summaryMatch
+    ? decodeEntities(stripTags(summaryMatch[1]))
+    : "";
+  const authorNames: string[] = [];
+  const authorRegex = /<author>[\s\S]*?<name>([\s\S]*?)<\/name>[\s\S]*?<\/author>/gi;
+  let authorMatch;
+  while ((authorMatch = authorRegex.exec(entryXml)) !== null) {
+    authorNames.push(decodeEntities(stripTags(authorMatch[1])));
+  }
+  return {
+    id,
+    title,
+    abstract,
+    authors: authorNames,
+    pdfUrl: `https://arxiv.org/pdf/${id}.pdf`,
+  };
+}
+
+/** Fetch recent papers in an arXiv category (e.g. cs.AI, cs.LG). */
+export async function fetchRecentByCategory(
+  category: string,
+  maxResults: number = 20
+): Promise<ArxivPaperMeta[]> {
+  const cat = String(category).trim() || "cs.AI";
+  try {
+    const url = `${ARXIV_LIST}?search_query=cat:${encodeURIComponent(cat)}&sortBy=submittedDate&sortOrder=descending&start=0&max_results=${Math.min(maxResults, 50)}`;
+    const res = await fetch(url, { headers: { Accept: "application/atom+xml" } });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const entries = xml.match(/<entry>[\s\S]*?<\/entry>/g) || [];
+    const papers: ArxivPaperMeta[] = [];
+    for (const entry of entries) {
+      const p = parseEntry(entry);
+      if (p) papers.push(p);
+    }
+    return papers;
+  } catch {
+    return [];
   }
 }

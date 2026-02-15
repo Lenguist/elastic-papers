@@ -22,7 +22,7 @@ export function addPapers(
   }>
 ): { added: LibraryPaper[]; total: number } {
   const normalized = papers
-    .map((p) => {
+    .map((p): LibraryPaper | null => {
       const id = String(p?.id ?? "").trim();
       const title = String(p?.title ?? "").trim() || `arXiv:${id}`;
       const url = p?.url ?? `https://arxiv.org/abs/${id}`;
