@@ -665,7 +665,7 @@ function HomePageInner() {
             </div>
             
             <Link
-              href="/discovery"
+              href={`/discovery${projectId ? `?project=${projectId}&name=${encodeURIComponent(projectName || scopeInput)}` : ''}`}
               className="rounded-lg bg-white px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
               style={{ border: '1px solid #E5E5E5' }}
             >
