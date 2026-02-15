@@ -159,10 +159,11 @@ export default function DiscoveryPage() {
                   >
                     {paper.title}
                   </a>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    arXiv:{paper.id}
-                    {paper.authors.length > 0 && ` · ${paper.authors.slice(0, 3).join(", ")}${paper.authors.length > 3 ? " et al." : ""}`}
-                  </p>
+                  {paper.authors.length > 0 && (
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {paper.authors.slice(0, 3).join(", ")}{paper.authors.length > 3 ? " et al." : ""}
+                    </p>
+                  )}
                   {paper.abstract && (
                     <p className="mt-2 line-clamp-2 text-sm text-zinc-600">
                       {paper.abstract}

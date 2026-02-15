@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getLibrary } from "@/lib/library-store";
+import { getLibrary } from "@/lib/library";
+import type { LibraryPaper } from "@/lib/library-store";
 
 const KIBANA_URL = process.env.KIBANA_URL?.replace(/\/$/, "");
 const KIBANA_API_KEY = process.env.KIBANA_API_KEY;
 const AGENT_ID = process.env.AGENT_ID || "basic-arxiv-assistant";
 
-function buildLibraryContext(): string {
-  const papers = getLibrary();
+function buildLibraryContext(papers: LibraryPaper[]): string {
   if (papers.length === 0) return "";
   const lines = papers.map((p, i) => {
     const num = i + 1;
@@ -42,7 +42,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const libraryContext = buildLibraryContext();
+  const papers = await getLibrary();
+  const libraryContext = buildLibraryContext(papers);
   const inputToAgent =
     libraryContext.length > 0
       ? `${libraryContext}User question: ${message}`

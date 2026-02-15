@@ -8,6 +8,10 @@ export type ArxivPaperMeta = {
   abstract: string;
   authors: string[];
   pdfUrl: string;
+  /** Publication year e.g. "2016" from <published> */
+  publishedYear?: string;
+  /** Full date "YYYY-MM-DD" when available */
+  publishedDate?: string;
 };
 
 const ARXIV_QUERY = "http://export.arxiv.org/api/query?id_list=";
@@ -54,12 +58,18 @@ export async function fetchArxivPaper(arxivId: string): Promise<ArxivPaperMeta |
     while ((authorMatch = authorRegex.exec(entry)) !== null) {
       authorNames.push(decodeEntities(stripTags(authorMatch[1])));
     }
+    const publishedMatch = entry.match(/<published[^>]*>([\s\S]*?)<\/published>/);
+    const publishedStr = publishedMatch ? stripTags(publishedMatch[1]).trim() : "";
+    const publishedYear = publishedStr.match(/^(\d{4})/)?.[1];
+    const publishedDate = publishedStr.match(/^(\d{4})-(\d{2})-(\d{2})/)?.[0];
     return {
       id,
       title,
       abstract,
       authors: authorNames,
       pdfUrl: `https://arxiv.org/pdf/${id}.pdf`,
+      publishedYear,
+      publishedDate: publishedDate || undefined,
     };
   } catch {
     return null;
@@ -85,12 +95,18 @@ function parseEntry(entryXml: string): ArxivPaperMeta | null {
   while ((authorMatch = authorRegex.exec(entryXml)) !== null) {
     authorNames.push(decodeEntities(stripTags(authorMatch[1])));
   }
+  const publishedMatch = entryXml.match(/<published[^>]*>([\s\S]*?)<\/published>/);
+  const publishedStr = publishedMatch ? stripTags(publishedMatch[1]).trim() : "";
+  const publishedYear = publishedStr.match(/^(\d{4})/)?.[1];
+  const publishedDate = publishedStr.match(/^(\d{4})-(\d{2})-(\d{2})/)?.[0];
   return {
     id,
     title,
     abstract,
     authors: authorNames,
     pdfUrl: `https://arxiv.org/pdf/${id}.pdf`,
+    publishedYear,
+    publishedDate: publishedDate || undefined,
   };
 }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { removePapers } from "@/lib/library-store";
+import { removePapers } from "@/lib/library";
 
 export async function POST(req: NextRequest) {
   let body: { paper_ids?: string[] };
@@ -17,6 +17,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { removed, total } = removePapers(paperIds);
+  const { removed, total } = await removePapers(paperIds);
   return NextResponse.json({ removed, total });
 }

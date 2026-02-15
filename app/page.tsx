@@ -26,7 +26,13 @@ export default function HomePage() {
     url?: string;
     abstract?: string;
     pdfUrl?: string;
+    addedAt?: string;
+    publishedYear?: string;
+    publishedDate?: string;
+    approved?: boolean;
   }>>([]);
+  const [authorsExpanded, setAuthorsExpanded] = useState<Set<string>>(new Set());
+  const [abstractExpanded, setAbstractExpanded] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -56,19 +62,30 @@ export default function HomePage() {
 
     // 3. Bare arxiv URLs
     const bareArxiv = text.match(/https?:\/\/arxiv\.org\/abs\/([0-9.]+)/g) || [];
-    bareArxiv.forEach(link => {
+      bareArxiv.forEach(link => {
       const idMatch = link.match(/([0-9.]+)$/);
       if (idMatch && !seenIds.has(idMatch[1])) {
         seenIds.add(idMatch[1]);
         papers.push({
           id: idMatch[1],
-          title: `arXiv:${idMatch[1]}`,
+          title: "",
           url: link,
         });
       }
     });
 
     return papers;
+  }
+
+  /** Remove arXiv IDs from agent response so they are not shown in the chat. */
+  function stripArxivIdsFromResponse(text: string): string {
+    if (!text || typeof text !== "string") return text;
+    return text
+      .replace(/\barXiv:\s*[0-9]+\.[0-9]+(?:v[0-9]+)?\b/gi, "")
+      .replace(/\s*\([0-9]+\.[0-9]+(?:v[0-9]+)?\)/g, "")
+      .replace(/\s*\[(?:arXiv:)?[0-9]+\.[0-9]+(?:v[0-9]+)?\]\s*/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
   }
 
   function saveMessageToLibrary(text: string) {
@@ -163,14 +180,15 @@ export default function HomePage() {
         ]);
       } else {
         // Ensure response is a string
-        const responseText = typeof data.response === 'string' 
+        const rawResponse = typeof data.response === 'string' 
           ? data.response 
           : typeof data.response === 'object' 
             ? JSON.stringify(data.response, null, 2)
             : String(data.response || "");
-        
+        // Do not show arXiv IDs in the chat; auto-add returned papers to library
+        const responseText = stripArxivIdsFromResponse(rawResponse);
         setMessages((m) => [...m, { role: "assistant", text: responseText }]);
-        // Sync library in case the agent added papers via the add_to_library tool
+        saveMessageToLibrary(rawResponse);
         fetchLibrary();
       }
     } catch (err) {
@@ -488,37 +506,149 @@ export default function HomePage() {
                   {libraryPapers.length === 0 ? (
                     <p className="text-sm text-zinc-500">No papers yet. Ask the AI to find papers on your topic.</p>
                   ) : (
-                    libraryPapers.map((paper) => (
-                      <div
-                        key={paper.id}
-                        className="rounded-lg border border-zinc-200 bg-white p-3 hover:border-pink-300 hover:bg-pink-50"
-                      >
-                        <a
-                          href={paper.url ?? `https://arxiv.org/abs/${paper.id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm font-medium text-zinc-900 hover:text-pink-600"
+                    libraryPapers.map((paper) => {
+                      const authors = paper.authors ?? [];
+                      const showExpand = authors.length > 3;
+                      const expanded = authorsExpanded.has(paper.id);
+                      const displayAuthors = expanded ? authors : authors.slice(0, 3);
+                      const addedDate = paper.addedAt
+                        ? new Date(paper.addedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+                        : null;
+                      const displayTitle =
+                        paper.title && !/^arXiv:\d+\.\d+/i.test(paper.title)
+                          ? paper.title
+                          : "Untitled";
+                      const publishedLabel = paper.publishedDate
+                        ? new Date(paper.publishedDate + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+                        : paper.publishedYear
+                          ? paper.publishedYear
+                          : null;
+                      return (
+                        <div
+                          key={paper.id}
+                          className="rounded-lg border border-zinc-200 bg-white p-3 hover:border-pink-300 hover:bg-pink-50"
                         >
-                          {paper.title}
-                        </a>
-                        <p className="mt-1 text-xs text-zinc-500">arXiv:{paper.id}</p>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <a
-                            href={paper.pdfUrl ?? `https://arxiv.org/pdf/${paper.id}.pdf`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs font-medium text-pink-600 hover:underline"
-                          >
-                            PDF
-                          </a>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <a
+                                href={paper.url ?? `https://arxiv.org/abs/${paper.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 text-sm font-semibold text-zinc-900 hover:text-pink-600"
+                              >
+                                <span className="shrink-0 text-zinc-400" aria-hidden>
+                                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M7 2h3v3" />
+                                    <path d="M11 1L5.5 6.5" />
+                                    <path d="M11 6v4a1 1 0 01-1 1H2a1 1 0 01-1-1V2a1 1 0 011-1h4" />
+                                  </svg>
+                                </span>
+                                {displayTitle}
+                              </a>
+                              {displayAuthors.length > 0 && (
+                                <p className="mt-1 text-xs text-zinc-600">
+                                  {displayAuthors.join(", ")}
+                                  {showExpand && (
+                                    <>
+                                      {!expanded && "..."}
+                                      <button
+                                        type="button"
+                                        onClick={() => setAuthorsExpanded((s) => {
+                                          const next = new Set(s);
+                                          if (next.has(paper.id)) next.delete(paper.id);
+                                          else next.add(paper.id);
+                                          return next;
+                                        })}
+                                        className="ml-1 text-pink-600 hover:underline"
+                                      >
+                                        {expanded ? "collapse" : "expand"}
+                                      </button>
+                                    </>
+                                  )}
+                                </p>
+                              )}
+                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0 text-xs text-zinc-500">
+                                {publishedLabel && (
+                                  <span>Date published: {publishedLabel}</span>
+                                )}
+                                {addedDate && (
+                                  <span>Date added to the library: {addedDate}</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await fetch("/api/library/approve", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ paper_id: paper.id, approved: true }),
+                                    });
+                                    await fetchLibrary();
+                                  } catch {
+                                    // ignore
+                                  }
+                                }}
+                                title="Approve"
+                                className={`rounded p-1 ${paper.approved ? "text-green-600" : "text-zinc-400 hover:text-green-600"}`}
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M20 6L9 17l-5-5" />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await fetch("/api/library/remove", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ paper_ids: [paper.id] }),
+                                    });
+                                    await fetchLibrary();
+                                  } catch {
+                                    // ignore
+                                  }
+                                }}
+                                title="Remove from library"
+                                className="rounded p-1 text-zinc-400 hover:text-red-600"
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6" />
+                                  <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                                  <line x1="10" y1="11" x2="10" y2="17" />
+                                  <line x1="14" y1="11" x2="14" y2="17" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                          {paper.abstract && (
+                            <div className="mt-2">
+                              <p
+                                className={`text-xs text-zinc-600 ${abstractExpanded.has(paper.id) ? "" : "line-clamp-2"}`}
+                                title={abstractExpanded.has(paper.id) ? undefined : paper.abstract}
+                              >
+                                {paper.abstract}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setAbstractExpanded((s) => {
+                                  const next = new Set(s);
+                                  if (next.has(paper.id)) next.delete(paper.id);
+                                  else next.add(paper.id);
+                                  return next;
+                                })}
+                                className="mt-0.5 text-xs text-pink-600 hover:underline"
+                              >
+                                {abstractExpanded.has(paper.id) ? "collapse" : "expand"}
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        {paper.abstract && (
-                          <p className="mt-2 line-clamp-2 text-xs text-zinc-600" title={paper.abstract}>
-                            {paper.abstract}
-                          </p>
-                        )}
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               )}

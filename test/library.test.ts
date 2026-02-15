@@ -141,7 +141,7 @@ describe("Library API", () => {
       const data = await res.json();
       expect(data.papers[0]).toMatchObject({
         id: "2602.99999",
-        title: "arXiv:2602.99999",
+        title: "Untitled",
         url: "https://arxiv.org/abs/2602.99999",
       });
     });
