@@ -16,7 +16,7 @@
 | Data | Where it lives | Persists? |
 |------|----------------|-----------|
 | **Library** (papers, approved, addedAt, etc.) | **Neon** (Postgres) when `POSTGRES_URL` or `DATABASE_URL` is set; otherwise in-memory fallback | Yes when DB is configured; no when using in-memory |
-| **Notes** | Not implemented yet | – |
+| **Notes** | Same as library (Neon when DB configured; in-memory fallback) | Yes when DB is configured |
 | **Search / papers index** | Elastic (Kibana agent, your search) | Yes – Elastic is the source for *finding* papers |
 
 When the DB is connected, **delete** removes that paper from the database. Papers are independent (one row per paper). Setup: see **documentation/vercel-postgres-setup.md** (Neon via Vercel Marketplace).

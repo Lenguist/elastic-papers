@@ -134,3 +134,56 @@ export async function dbSetPaperApproved(paperId: string, approved: boolean): Pr
 export function hasDb(): boolean {
   return Boolean(process.env.POSTGRES_URL || process.env.DATABASE_URL);
 }
+
+// --- Notes ---
+export type NoteRow = {
+  id: string;
+  content: string;
+  paperId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function rowToNote(row: Record<string, unknown>): NoteRow {
+  return {
+    id: String(row.id),
+    content: String(row.content ?? ""),
+    paperId: row.paper_id != null ? String(row.paper_id) : null,
+    createdAt: row.created_at != null ? new Date(row.created_at as string).toISOString() : "",
+    updatedAt: row.updated_at != null ? new Date(row.updated_at as string).toISOString() : "",
+  };
+}
+
+export async function dbGetNotes(): Promise<NoteRow[]> {
+  const sql = getSql();
+  if (!sql) return [];
+  const rows = await sql`SELECT id, content, paper_id, created_at, updated_at FROM notes ORDER BY updated_at DESC`;
+  return (rows as Record<string, unknown>[]).map(rowToNote);
+}
+
+export async function dbCreateNote(content: string, paperId?: string | null): Promise<NoteRow | null> {
+  const sql = getSql();
+  if (!sql) return null;
+  const now = new Date().toISOString();
+  const pid = paperId && paperId.trim() ? paperId.trim() : null;
+  const rows = await sql`
+    INSERT INTO notes (content, paper_id, updated_at)
+    VALUES (${content}, ${pid}, ${now})
+    RETURNING id, content, paper_id, created_at, updated_at
+  `;
+  if (rows.length === 0) return null;
+  return rowToNote(rows[0] as Record<string, unknown>);
+}
+
+export async function dbUpdateNote(id: string, content: string): Promise<void> {
+  const sql = getSql();
+  if (!sql) return;
+  const now = new Date().toISOString();
+  await sql`UPDATE notes SET content = ${content}, updated_at = ${now} WHERE id = ${id}`;
+}
+
+export async function dbDeleteNote(id: string): Promise<void> {
+  const sql = getSql();
+  if (!sql) return;
+  await sql`DELETE FROM notes WHERE id = ${id}`;
+}

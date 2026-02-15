@@ -35,6 +35,13 @@ export default function HomePage() {
   const [abstractExpanded, setAbstractExpanded] = useState<Set<string>>(new Set());
   const [savedToLibraryMessageIndices, setSavedToLibraryMessageIndices] = useState<Set<number>>(new Set());
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<Set<string>>(new Set());
+  const [notes, setNotes] = useState<Array<{ id: string; content: string; paperId: string | null; createdAt: string; updatedAt: string }>>([]);
+  const [newNoteContent, setNewNoteContent] = useState("");
+  const [paperNoteDrafts, setPaperNoteDrafts] = useState<Record<string, string>>({});
+  const [showNotesForPaper, setShowNotesForPaper] = useState<Set<string>>(new Set());
+  const [addNoteOpenForPaper, setAddNoteOpenForPaper] = useState<Set<string>>(new Set());
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteContent, setEditingNoteContent] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -133,6 +140,20 @@ export default function HomePage() {
   // Refetch library when switching to Library tab so we get updated abstracts/PDF links
   useEffect(() => {
     if (scopeDefined && activeTab === "library") fetchLibrary();
+  }, [scopeDefined, activeTab]);
+
+  async function fetchNotes() {
+    try {
+      const res = await fetch("/api/notes");
+      const data = await res.json();
+      if (Array.isArray(data.notes)) setNotes(data.notes);
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    if (scopeDefined && (activeTab === "notes" || activeTab === "library")) fetchNotes();
   }, [scopeDefined, activeTab]);
 
   function handleScopeSubmit(e: React.FormEvent) {
@@ -483,9 +504,9 @@ export default function HomePage() {
             <div className="flex gap-0 border-b border-pink-600" style={{ marginBottom: '-1px' }}>
               <button
                 onClick={() => setActiveTab("library")}
-                className="flex items-center gap-2 border border-b-0 border-pink-600 bg-white px-4 py-1.5 text-sm"
+                className="flex items-center gap-2 border border-b-0 border-pink-600 px-4 py-1.5 text-sm"
                 style={{
-                  background: activeTab === "library" ? "#FFF" : "transparent",
+                  background: activeTab === "library" ? "rgba(196, 210, 237, 0.3)" : "transparent",
                 }}
               >
                 <span>Library</span>
@@ -493,9 +514,9 @@ export default function HomePage() {
               </button>
               <button
                 onClick={() => setActiveTab("notes")}
-                className="flex items-center gap-2 border border-b-0 border-l-0 border-pink-600 bg-white px-4 py-1.5 text-sm"
+                className="flex items-center gap-2 border border-b-0 border-l-0 border-pink-600 px-4 py-1.5 text-sm"
                 style={{
-                  background: activeTab === "notes" ? "#FFF" : "transparent",
+                  background: activeTab === "notes" ? "rgba(196, 210, 237, 0.3)" : "transparent",
                 }}
               >
                 <span>Notes</span>
@@ -698,6 +719,117 @@ export default function HomePage() {
                               </button>
                             </div>
                           )}
+                          {/* Notes for this paper - toggles (Notion-style: pink pill, normal text) */}
+                          <div className="mt-3">
+                            {(() => {
+                              const paperNotes = notes.filter((n) => n.paperId === paper.id);
+                              const hasNotes = paperNotes.length > 0;
+                              const showNotes = showNotesForPaper.has(paper.id);
+                              const addOpen = addNoteOpenForPaper.has(paper.id);
+                              return (
+                                <div className="space-y-2">
+                                  {hasNotes && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowNotesForPaper((s) => {
+                                          const next = new Set(s);
+                                          if (next.has(paper.id)) next.delete(paper.id);
+                                          else next.add(paper.id);
+                                          return next;
+                                        })}
+                                        className="flex items-center gap-1.5 text-left text-xs text-zinc-800 hover:opacity-80"
+                                      >
+                                        <span
+                                          className="flex shrink-0 text-pink-600 transition-transform"
+                                          style={{ transform: showNotes ? "rotate(90deg)" : "none" }}
+                                          aria-hidden
+                                        >
+                                          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" className="block">
+                                            <path d="M2 1v8l6-4-6-4z" />
+                                          </svg>
+                                        </span>
+                                        <span>{showNotes ? "Hide notes" : `Show notes (${paperNotes.length})`}</span>
+                                      </button>
+                                      {showNotes && (
+                                        <div className="space-y-2 pl-4">
+                                          {paperNotes.map((n) => (
+                                            <div key={n.id} className="flex items-start justify-between gap-2 text-xs">
+                                              <p className="min-w-0 flex-1 text-zinc-600 whitespace-pre-wrap">{n.content}</p>
+                                              <span className="shrink-0 text-zinc-400">
+                                                {new Date(n.updatedAt).toLocaleDateString("en-GB", {
+                                                  day: "numeric",
+                                                  month: "short",
+                                                  year: "numeric",
+                                                  hour: "2-digit",
+                                                  minute: "2-digit",
+                                                })}
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setAddNoteOpenForPaper((s) => {
+                                      const next = new Set(s);
+                                      if (next.has(paper.id)) next.delete(paper.id);
+                                      else next.add(paper.id);
+                                      return next;
+                                    })}
+                                    className="flex items-center gap-1.5 text-left text-xs text-zinc-800 hover:opacity-80"
+                                  >
+                                    <span
+                                      className="flex shrink-0 text-pink-600 transition-transform"
+                                      style={{ transform: addOpen ? "rotate(90deg)" : "none" }}
+                                      aria-hidden
+                                    >
+                                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" className="block">
+                                        <path d="M2 1v8l6-4-6-4z" />
+                                      </svg>
+                                    </span>
+                                    <span>{addOpen ? "Cancel" : "Add a note"}</span>
+                                  </button>
+                                  {addOpen && (
+                                    <div className="flex gap-2">
+                                      <textarea
+                                        value={paperNoteDrafts[paper.id] ?? ""}
+                                        onChange={(e) => setPaperNoteDrafts((d) => ({ ...d, [paper.id]: e.target.value }))}
+                                        placeholder="Add a note for this paper..."
+                                        rows={2}
+                                        className="min-w-0 flex-1 rounded border border-zinc-200 p-2 text-xs placeholder:text-zinc-400 focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                                      />
+                                      <button
+                                        type="button"
+                                        disabled={!(paperNoteDrafts[paper.id] ?? "").trim()}
+                                        onClick={async () => {
+                                          const content = (paperNoteDrafts[paper.id] ?? "").trim();
+                                          if (!content) return;
+                                          try {
+                                            await fetch("/api/notes", {
+                                              method: "POST",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ content, paper_id: paper.id }),
+                                            });
+                                            setPaperNoteDrafts((d) => ({ ...d, [paper.id]: "" }));
+                                            setAddNoteOpenForPaper((s) => { const n = new Set(s); n.delete(paper.id); return n; });
+                                            await fetchNotes();
+                                          } catch {
+                                            // ignore
+                                          }
+                                        }}
+                                        className="shrink-0 self-end rounded bg-pink-600 px-2 py-1.5 text-xs text-white hover:bg-pink-700 disabled:opacity-50"
+                                      >
+                                        Add note
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
                         </div>
                       );
                     })}
@@ -707,8 +839,172 @@ export default function HomePage() {
               )}
               
               {activeTab === "notes" && (
-                <div>
-                  <p className="text-sm text-zinc-500">Notes feature coming soon...</p>
+                <div className="flex flex-col gap-6 font-sans">
+                  {/* New general note - Notion-style top block */}
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const content = newNoteContent.trim();
+                      if (!content) return;
+                      try {
+                        await fetch("/api/notes", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ content }),
+                        });
+                        setNewNoteContent("");
+                        await fetchNotes();
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm"
+                  >
+                    <textarea
+                      value={newNoteContent}
+                      onChange={(e) => setNewNoteContent(e.target.value)}
+                      placeholder="New note…"
+                      rows={2}
+                      className="w-full resize-none border-0 p-0 text-sm text-zinc-800 placeholder:text-zinc-400 focus:outline-none focus:ring-0"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newNoteContent.trim()}
+                      className="mt-2 text-xs font-medium text-pink-600 hover:underline disabled:opacity-50"
+                    >
+                      Add note
+                    </button>
+                  </form>
+
+                  {/* Notes grouped by paper (bundles) + General */}
+                  {(() => {
+                    const general = notes.filter((n) => !n.paperId);
+                    const byPaper = new Map<string | null, typeof notes>();
+                    byPaper.set(null, general);
+                    for (const note of notes) {
+                      if (note.paperId) {
+                        if (!byPaper.has(note.paperId)) byPaper.set(note.paperId, []);
+                        byPaper.get(note.paperId)!.push(note);
+                      }
+                    }
+                    const paperIds = [...byPaper.keys()].filter((id): id is string => id !== null);
+                    paperIds.sort((a, b) => {
+                      const aMax = Math.max(...(byPaper.get(a) ?? []).map((n) => new Date(n.updatedAt).getTime()));
+                      const bMax = Math.max(...(byPaper.get(b) ?? []).map((n) => new Date(n.updatedAt).getTime()));
+                      return bMax - aMax;
+                    });
+                    const sections: { label: string; paperId: string | null; items: typeof notes }[] = [];
+                    if (general.length > 0) sections.push({ label: "General", paperId: null, items: general });
+                    for (const pid of paperIds) {
+                      const items = byPaper.get(pid) ?? [];
+                      const title = libraryPapers.find((p) => p.id === pid)?.title ?? "Untitled";
+                      sections.push({ label: title, paperId: pid, items });
+                    }
+                    if (sections.length === 0) return <p className="text-sm text-zinc-500">No notes yet.</p>;
+                    return (
+                      <div className="space-y-8">
+                        {sections.map(({ label, paperId, items }) => (
+                          <section key={paperId ?? "general"}>
+                            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              {label}
+                            </h3>
+                            <div className="space-y-4">
+                              {items.map((note) => (
+                                <div
+                                  key={note.id}
+                                  className="rounded-lg border border-zinc-100 bg-white py-3 px-4 text-sm text-zinc-800"
+                                >
+                                  {editingNoteId === note.id ? (
+                                    <div className="space-y-2">
+                                      <textarea
+                                        value={editingNoteContent}
+                                        onChange={(e) => setEditingNoteContent(e.target.value)}
+                                        rows={4}
+                                        className="w-full resize-none border-0 p-0 text-sm focus:outline-none focus:ring-0"
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              await fetch(`/api/notes/${note.id}`, {
+                                                method: "PATCH",
+                                                headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ content: editingNoteContent }),
+                                              });
+                                              setEditingNoteId(null);
+                                              setEditingNoteContent("");
+                                              await fetchNotes();
+                                            } catch {
+                                              // ignore
+                                            }
+                                          }}
+                                          className="text-xs font-medium text-pink-600 hover:underline"
+                                        >
+                                          Save
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingNoteId(null);
+                                            setEditingNoteContent("");
+                                          }}
+                                          className="text-xs text-zinc-500 hover:underline"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <p className="whitespace-pre-wrap leading-relaxed">{note.content}</p>
+                                      <div className="mt-2 flex items-center justify-between gap-2">
+                                        <span className="text-xs text-zinc-400">
+                                          {new Date(note.updatedAt).toLocaleDateString("en-GB", {
+                                            day: "numeric",
+                                            month: "short",
+                                            year: "numeric",
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                          })}
+                                        </span>
+                                        <div className="flex gap-3">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEditingNoteId(note.id);
+                                              setEditingNoteContent(note.content);
+                                            }}
+                                            className="text-xs text-pink-600 hover:underline"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              try {
+                                                await fetch(`/api/notes/${note.id}`, { method: "DELETE" });
+                                                await fetchNotes();
+                                              } catch {
+                                                // ignore
+                                              }
+                                            }}
+                                            className="text-xs text-zinc-500 hover:underline"
+                                          >
+                                            Delete
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
