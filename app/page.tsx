@@ -69,6 +69,7 @@ function HomePageInner() {
   const [authorsExpanded, setAuthorsExpanded] = useState<Set<string>>(new Set());
   const [abstractExpanded, setAbstractExpanded] = useState<Set<string>>(new Set());
   const [savedToLibraryMessageIndices, setSavedToLibraryMessageIndices] = useState<Set<number>>(new Set());
+  const [savedToNotesMessageIndices, setSavedToNotesMessageIndices] = useState<Set<number>>(new Set());
   const [chatPaperSelections, setChatPaperSelections] = useState<Record<number, Set<string>>>({});
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<Array<{ id: string; content: string; paperId: string | null; createdAt: string; updatedAt: string }>>([]);
@@ -1123,7 +1124,17 @@ function HomePageInner() {
                                         <div className="space-y-2 pl-4">
                                           {paperNotes.map((n) => (
                                             <div key={n.id} className="flex items-start justify-between gap-2 text-xs">
-                                              <p className="min-w-0 flex-1 text-zinc-600 whitespace-pre-wrap">{n.content}</p>
+                                              <div className="min-w-0 flex-1 prose prose-xs max-w-none text-zinc-600 dark:text-zinc-400 dark:prose-invert">
+                                                <ReactMarkdown
+                                                  components={{
+                                                    a: ({ node, ...props }) => <a {...props} className="text-pink-600 hover:underline" target="_blank" rel="noopener noreferrer" />,
+                                                    p: ({ node, ...props }) => <p {...props} className="text-xs leading-relaxed mb-1" />,
+                                                    code: ({ node, ...props }) => <code {...props} className="rounded bg-zinc-100 px-1 py-0.5 text-[10px] dark:bg-zinc-800" />,
+                                                  }}
+                                                >
+                                                  {n.content}
+                                                </ReactMarkdown>
+                                              </div>
                                               <span className="shrink-0 text-zinc-400">
                                                 {new Date(n.updatedAt).toLocaleDateString("en-GB", {
                                                   day: "numeric",
@@ -1325,7 +1336,25 @@ function HomePageInner() {
                                     </div>
                                   ) : (
                                     <>
-                                      <p className="whitespace-pre-wrap leading-relaxed">{note.content}</p>
+                                      <div className="prose prose-sm max-w-none text-zinc-900 dark:text-zinc-100 dark:prose-invert">
+                                        <ReactMarkdown
+                                          components={{
+                                            a: ({ node, ...props }) => (
+                                              <a {...props} className="text-pink-600 hover:underline dark:text-pink-400" target="_blank" rel="noopener noreferrer" />
+                                            ),
+                                            h2: ({ node, ...props }) => <h2 {...props} className="mt-3 mb-1.5 text-sm font-semibold" />,
+                                            h3: ({ node, ...props }) => <h3 {...props} className="mt-2 mb-1 text-sm font-medium" />,
+                                            p: ({ node, ...props }) => <p {...props} className="text-sm leading-relaxed mb-2" />,
+                                            ul: ({ node, ...props }) => <ul {...props} className="space-y-1 my-1.5 list-disc pl-4" />,
+                                            ol: ({ node, ...props }) => <ol {...props} className="space-y-1 my-1.5 list-decimal pl-4" />,
+                                            li: ({ node, ...props }) => <li {...props} className="text-sm" />,
+                                            code: ({ node, ...props }) => <code {...props} className="rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800" />,
+                                            pre: ({ node, ...props }) => <pre {...props} className="rounded-lg bg-zinc-100 p-3 text-xs overflow-x-auto dark:bg-zinc-800" />,
+                                          }}
+                                        >
+                                          {note.content}
+                                        </ReactMarkdown>
+                                      </div>
                                       <div className="mt-2 flex items-center justify-between gap-2">
                                         <span className="text-xs text-zinc-400">
                                           {new Date(note.updatedAt).toLocaleDateString("en-GB", {
@@ -1828,6 +1857,37 @@ function HomePageInner() {
                         </button>
                       )
                     )}
+                    {/* Save to Notes button */}
+                    {projectId && (
+                      savedToNotesMessageIndices.has(i) ? (
+                        <div className="mt-2 flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                          <span>✓</span>
+                          <span>Saved to notes</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setSavedToNotesMessageIndices((s) => new Set(s).add(i));
+                            try {
+                              await apiFetch("/api/notes", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ content: msg.text }),
+                              });
+                              await fetchNotes();
+                            } catch { /* best effort */ }
+                          }}
+                          className="mt-3 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-950/60"
+                          title="Save this response to your project notes"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                          Save to notes
+                        </button>
+                      )
+                    )}
                   </div>
                 </div>
               )}
@@ -1920,6 +1980,7 @@ function HomePageInner() {
         <SandboxPanel
           repoUrl={sandboxRepo.url}
           repoName={sandboxRepo.name}
+          projectId={projectId}
           minimized={sandboxMinimized}
           onMinimize={() => setSandboxMinimized(true)}
           onRestore={() => setSandboxMinimized(false)}

@@ -13,13 +13,14 @@ type ChatEntry =
 interface SandboxPanelProps {
   repoUrl: string;
   repoName: string;
+  projectId?: string | null;
   minimized?: boolean;
   onMinimize: () => void;
   onRestore: () => void;
   onClose: () => void;
 }
 
-export default function SandboxPanel({ repoUrl, repoName, minimized, onMinimize, onRestore, onClose }: SandboxPanelProps) {
+export default function SandboxPanel({ repoUrl, repoName, projectId, minimized, onMinimize, onRestore, onClose }: SandboxPanelProps) {
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState("");
@@ -27,6 +28,8 @@ export default function SandboxPanel({ repoUrl, repoName, minimized, onMinimize,
   const [creating, setCreating] = useState(true);
   const [envInput, setEnvInput] = useState("");
   const [showEnvForm, setShowEnvForm] = useState(false);
+  const [noteSaved, setNoteSaved] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const createdRef = useRef(false);
@@ -202,6 +205,58 @@ export default function SandboxPanel({ repoUrl, repoName, minimized, onMinimize,
     sendMessage(sandboxId, input.trim());
   }
 
+  async function saveToNotes() {
+    if (!projectId || savingNote) return;
+    setSavingNote(true);
+
+    // Build a summary from the chat entries
+    const commands = entries.filter((e) => e.type === "command") as Array<{
+      type: "command"; command: string; stdout?: string; stderr?: string; exit_code?: number;
+    }>;
+    const messages = entries.filter((e) => e.type === "message") as Array<{ type: "message"; text: string }>;
+    const errors = entries.filter((e) => e.type === "error") as Array<{ type: "error"; text: string }>;
+
+    const successCount = commands.filter((c) => c.exit_code === 0).length;
+    const failCount = commands.filter((c) => c.exit_code !== undefined && c.exit_code !== 0).length;
+
+    // Summarize commands (show last few)
+    const recentCommands = commands.slice(-6).map(
+      (c) => `$ ${c.command}  →  ${c.exit_code === 0 ? "OK" : `exit ${c.exit_code}`}`
+    ).join("\n");
+
+    // Get Claude's last message as summary
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1].text : "";
+    const summaryText = lastMessage.length > 500 ? lastMessage.slice(0, 500) + "..." : lastMessage;
+
+    const noteContent = [
+      `## Sandbox Run: ${repoName}`,
+      `**Repo:** ${repoUrl}`,
+      `**Date:** ${new Date().toLocaleDateString()}`,
+      `**Commands:** ${commands.length} total (${successCount} succeeded, ${failCount} failed)`,
+      errors.length > 0 ? `**Errors:** ${errors.length}` : "",
+      "",
+      "### Recent Commands",
+      "```",
+      recentCommands || "(none)",
+      "```",
+      "",
+      summaryText ? `### Agent Summary\n${summaryText}` : "",
+    ].filter(Boolean).join("\n");
+
+    try {
+      await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectId, content: noteContent }),
+      });
+      setNoteSaved(true);
+      setTimeout(() => setNoteSaved(false), 3000);
+    } catch {
+      /* best effort */
+    }
+    setSavingNote(false);
+  }
+
   async function handleTerminate() {
     if (sandboxId) {
       try {
@@ -280,6 +335,20 @@ export default function SandboxPanel({ repoUrl, repoName, minimized, onMinimize,
               >
                 Open in Modal
               </a>
+            )}
+            {projectId && entries.length > 0 && (
+              <button
+                onClick={saveToNotes}
+                disabled={savingNote}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  noteSaved
+                    ? "border-green-300 bg-green-50 text-green-700"
+                    : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                }`}
+                title="Save a summary of this sandbox run to your project notes"
+              >
+                {savingNote ? "Saving..." : noteSaved ? "Saved!" : "Save to Notes"}
+              </button>
             )}
             <button
               onClick={() => setShowEnvForm(!showEnvForm)}

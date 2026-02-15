@@ -463,7 +463,7 @@ async function executeTool(
 
 // ─── Library context builder ─────────────────────────────────────────────────
 
-function buildLibraryContext(papers: LibraryPaper[]): string {
+function buildLibraryContext(papers: LibraryPaper[], isUserSelection: boolean): string {
   if (papers.length === 0) return "";
   const lines = papers.map((p, i) => {
     const parts = [
@@ -474,6 +474,10 @@ function buildLibraryContext(papers: LibraryPaper[]): string {
     ].filter(Boolean).join("\n");
     return `[Paper ${i + 1}]\n${parts}`;
   });
+
+  if (isUserSelection) {
+    return `The user has SELECTED the following ${papers.length} paper(s) in the UI. When they say "these", "them", "the selected papers", or "compare these", they are referring to EXACTLY these papers:\n\n` + lines.join("\n\n");
+  }
   return "Papers in the user's library:\n\n" + lines.join("\n\n");
 }
 
@@ -535,11 +539,12 @@ export async function POST(req: NextRequest) {
   // Get library papers for context
   let papers = await getLibrary(projectId);
   const selectedIds = body.selected_paper_ids as string[] | undefined;
-  if (Array.isArray(selectedIds) && selectedIds.length > 0) {
+  const hasUserSelection = Array.isArray(selectedIds) && selectedIds.length > 0;
+  if (hasUserSelection) {
     const idSet = new Set(selectedIds.map((id) => String(id).trim()).filter(Boolean));
     papers = papers.filter((p) => idSet.has(p.id));
   }
-  const libraryContext = buildLibraryContext(papers);
+  const libraryContext = buildLibraryContext(papers, hasUserSelection);
 
   // Build conversation from history + new message
   const history = body.history as Array<{ role: string; text: string }> | undefined;
@@ -559,8 +564,16 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Add the current message
-  messages.push({ role: "user", content: message });
+  // Add the current message, with selection context if papers were selected
+  if (hasUserSelection && papers.length > 0) {
+    const selectedTitles = papers.map((p) => `"${p.title}"`).join(", ");
+    messages.push({
+      role: "user",
+      content: `[The user has selected ${papers.length} paper(s) in the UI: ${selectedTitles}]\n\n${message}`,
+    });
+  } else {
+    messages.push({ role: "user", content: message });
+  }
 
   console.log("\n╔══════════════════════════════════════════════════════════╗");
   console.log("║  CHAT: OpenAI Orchestrator                              ║");
