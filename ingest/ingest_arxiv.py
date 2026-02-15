@@ -12,6 +12,9 @@ Usage:
   # With semantic index
   ES_INDEX=arxiv-papers-2026-semantic python ingest_arxiv.py --start 2025-01 --end 2026-02
 
+  # CS domain only (computer science papers)
+  python ingest_arxiv.py --from 2025-01-01 --until 2025-03-31 --cs-only
+
 Env: ELASTICSEARCH_CLOUD_ID, ELASTICSEARCH_API_KEY, ES_INDEX (default: arxiv-papers-2026)
 """
 
@@ -152,7 +155,12 @@ def filter_in_range(docs: list[dict], from_d: str, until_d: str) -> list[dict]:
     return [d for d in docs if from_d <= (d.get("created") or "") <= until_d]
 
 
-def ingest_range(es: Elasticsearch, from_d: str, until_d: str, verbose: bool = True) -> int:
+def filter_cs_only(docs: list[dict]) -> list[dict]:
+    """Keep only papers with at least one cs.* category (computer science)."""
+    return [d for d in docs if any((c or "").startswith("cs.") for c in d.get("categories") or [])]
+
+
+def ingest_range(es: Elasticsearch, from_d: str, until_d: str, cs_only: bool = False, verbose: bool = True) -> int:
     total = 0
     token = None
     page = 0
@@ -160,6 +168,8 @@ def ingest_range(es: Elasticsearch, from_d: str, until_d: str, verbose: bool = T
         page += 1
         records, token = fetch_page(from_d, until_d, token)
         filtered = filter_in_range(records, from_d, until_d)
+        if cs_only:
+            filtered = filter_cs_only(filtered)
         if filtered:
             actions = [
                 {"_index": INDEX_NAME, "_id": d["arxiv_id"], "_source": {k: d[k] for k in ("arxiv_id", "title", "authors", "abstract", "categories", "created")}}
@@ -225,6 +235,7 @@ def main():
     p.add_argument("--start", metavar="YYYY-MM", help="Start month (backfill mode)")
     p.add_argument("--end", metavar="YYYY-MM", help="End month (backfill mode)")
     p.add_argument("--quiet", "-q", action="store_true", help="Less output")
+    p.add_argument("--cs-only", action="store_true", help="Ingest only computer science papers (categories starting with cs.)")
     args = p.parse_args()
 
     es = _get_es_client()
@@ -237,14 +248,14 @@ def main():
         total = 0
         for label, from_d, until_d in month_range(args.start, args.end):
             print(f">> {label} ({from_d}..{until_d})", flush=True)
-            n = ingest_range(es, from_d, until_d, verbose=not args.quiet)
+            n = ingest_range(es, from_d, until_d, cs_only=args.cs_only, verbose=not args.quiet)
             total += n
         print(f"Done. Indexed {total} papers into '{INDEX_NAME}'")
     elif args.from_ and args.until:
         # Single range
         until_d = min(args.until, today)
         print(f">> {args.from_}..{until_d}", flush=True)
-        n = ingest_range(es, args.from_, until_d, verbose=not args.quiet)
+        n = ingest_range(es, args.from_, until_d, cs_only=args.cs_only, verbose=not args.quiet)
         print(f"Done. Indexed {n} papers into '{INDEX_NAME}'")
     else:
         p.print_help()

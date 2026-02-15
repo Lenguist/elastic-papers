@@ -49,10 +49,12 @@ export async function POST(req: NextRequest) {
     papers = papers.filter((p) => idSet.has(p.id));
   }
   const libraryContext = buildLibraryContext(papers);
+  const formatInstruction =
+    "When you recommend or cite papers, format each as **[Full Paper Title](https://arxiv.org/abs/arXivID)** (e.g. **[ACE: Agentic Context Engineering](https://arxiv.org/abs/2510.04618)**) so the user can save them to the library with correct titles.\n\n";
   const inputToAgent =
-    libraryContext.length > 0
-      ? `${libraryContext}User question: ${message}`
-      : message;
+    formatInstruction +
+    (libraryContext.length > 0 ? libraryContext : "") +
+    `User question: ${message}`;
 
   const url = `${KIBANA_URL}/api/agent_builder/converse`;
   const res = await fetch(url, {

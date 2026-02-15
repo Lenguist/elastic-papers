@@ -71,17 +71,27 @@ export default function HomePage() {
 
     // 3. Bare arxiv URLs
     const bareArxiv = text.match(/https?:\/\/arxiv\.org\/abs\/([0-9.]+)/g) || [];
-      bareArxiv.forEach(link => {
+    bareArxiv.forEach((link) => {
       const idMatch = link.match(/([0-9.]+)$/);
       if (idMatch && !seenIds.has(idMatch[1])) {
         seenIds.add(idMatch[1]);
-        papers.push({
-          id: idMatch[1],
-          title: "",
-          url: link,
-        });
+        papers.push({ id: idMatch[1], title: "", url: link });
       }
     });
+
+    // 4. Standalone arXiv IDs (e.g. 2401.12345 or arXiv:2401.12345) so we show the button even when the agent doesn't use markdown links
+    const idRegex = /\b(?:arXiv:)?(\d{4}\.\d{4,5}(?:v\d+)?)\b/gi;
+    while ((m = idRegex.exec(text)) !== null) {
+      const id = m[1];
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        papers.push({
+          id,
+          title: "",
+          url: `https://arxiv.org/abs/${id}`,
+        });
+      }
+    }
 
     return papers;
   }
@@ -563,7 +573,7 @@ export default function HomePage() {
                       const displayTitle =
                         paper.title && !/^arXiv:\d+\.\d+/i.test(paper.title)
                           ? paper.title
-                          : "Untitled";
+                          : `Untitled (${paper.id})`;
                       const publishedLabel = paper.publishedDate
                         ? new Date(paper.publishedDate + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
                         : paper.publishedYear
