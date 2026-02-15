@@ -42,7 +42,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const papers = await getLibrary();
+  let papers = await getLibrary();
+  const selectedIds = body.selected_paper_ids as string[] | undefined;
+  if (Array.isArray(selectedIds) && selectedIds.length > 0) {
+    const idSet = new Set(selectedIds.map((id) => String(id).trim()).filter(Boolean));
+    papers = papers.filter((p) => idSet.has(p.id));
+  }
   const libraryContext = buildLibraryContext(papers);
   const inputToAgent =
     libraryContext.length > 0

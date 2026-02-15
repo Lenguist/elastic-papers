@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLibrary, addPapers, updatePaperContent, type LibraryPaper } from "@/lib/library";
+import { hasDb } from "@/lib/db";
 import { fetchArxivPaper } from "@/lib/arxiv";
 
 export type { LibraryPaper };
 
 export async function GET() {
   const papers = await getLibrary();
-  return NextResponse.json({ papers });
+  // So you can verify: "db" = using Neon, "memory" = in-memory (no env or not connected)
+  const source = hasDb() ? "db" : "memory";
+  return NextResponse.json({ papers, _source: source });
 }
 
 /** Enrich library papers with abstract and authors from arXiv (background, non-blocking). */

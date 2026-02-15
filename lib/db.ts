@@ -1,5 +1,12 @@
+import path from "path";
+import { config } from "dotenv";
 import { neon } from "@neondatabase/serverless";
 import type { LibraryPaper } from "@/lib/library-store";
+
+// Load .env if Next didn't (e.g. wrong cwd when starting dev server)
+if (!process.env.POSTGRES_URL && !process.env.DATABASE_URL) {
+  config({ path: path.join(process.cwd(), ".env") });
+}
 
 function getSql() {
   const url = process.env.POSTGRES_URL || process.env.DATABASE_URL;
@@ -70,11 +77,13 @@ export async function dbRemovePapers(paperIds: string[]): Promise<{ removed: num
   const sql = getSql();
   if (!sql) return { removed: 0, total: 0 };
 
-  const ids = paperIds.map((id) => String(id).trim()).filter(Boolean);
+  const ids = [...new Set(paperIds.map((id) => String(id).trim()).filter(Boolean))];
   if (ids.length === 0) return { removed: 0, total: (await dbGetLibrary()).length };
 
   const before = (await sql`SELECT 1 FROM library`).length;
-  await sql`DELETE FROM library WHERE paper_id = ANY(${ids})`;
+  for (const id of ids) {
+    await sql`DELETE FROM library WHERE paper_id = ${id}`;
+  }
   const after = (await sql`SELECT 1 FROM library`).length;
   return { removed: before - after, total: after };
 }

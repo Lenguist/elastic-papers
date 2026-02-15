@@ -9,13 +9,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const paperIds = body.paper_ids;
-  if (!Array.isArray(paperIds)) {
+  const raw = body.paper_ids;
+  if (!Array.isArray(raw)) {
     return NextResponse.json(
       { error: "paper_ids array is required" },
       { status: 400 }
     );
   }
+  const paperIds = raw.map((id) => (id != null ? String(id).trim() : "")).filter(Boolean);
 
   const { removed, total } = await removePapers(paperIds);
   return NextResponse.json({ removed, total });

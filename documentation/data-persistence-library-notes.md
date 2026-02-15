@@ -21,6 +21,16 @@
 
 When the DB is connected, **delete** removes that paper from the database. Papers are independent (one row per paper). Setup: see **documentation/vercel-postgres-setup.md** (Neon via Vercel Marketplace).
 
+### Connection checklist
+
+1. **Env:** In project root `.env` you need `POSTGRES_URL` or `DATABASE_URL` (Neon connection string). Restart the dev server after changing `.env`.
+2. **Schema:** In Neon Dashboard → SQL Editor, run the contents of **scripts/schema.sql** so the `library` table exists.
+3. **Verify:** With the app running (`npm run dev`):
+   - Open **http://localhost:3000/api/health** — should show `"db": "connected"` and `libraryRows`. If you see `"db": "not_configured"`, env isn’t loaded. If you see `"db": "error"`, the URL is wrong or the table wasn’t created.
+   - Open **http://localhost:3000/api/library** — response includes `_source: "db"` when using Neon, or `_source: "memory"` when using in-memory.
+
+There is **no user identity** yet: the library is global (one shared library). Adding auth and a `user_id` column later will give each user their own library.
+
 ---
 
 ## Elastic vs database

@@ -33,6 +33,8 @@ export default function HomePage() {
   }>>([]);
   const [authorsExpanded, setAuthorsExpanded] = useState<Set<string>>(new Set());
   const [abstractExpanded, setAbstractExpanded] = useState<Set<string>>(new Set());
+  const [savedToLibraryMessageIndices, setSavedToLibraryMessageIndices] = useState<Set<number>>(new Set());
+  const [selectedLibraryIds, setSelectedLibraryIds] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -163,12 +165,14 @@ export default function HomePage() {
       setTimeout(() => setLoadingStage("Analyzing results..."), 2000);
       setTimeout(() => setLoadingStage("Generating response..."), 4000);
 
+      const selectedIds = selectedLibraryIds.size > 0 ? [...selectedLibraryIds] : undefined;
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           message: text,
-          scope: scopeInput 
+          scope: scopeInput,
+          selected_paper_ids: selectedIds,
         }),
       });
       const data = await res.json();
@@ -506,7 +510,28 @@ export default function HomePage() {
                   {libraryPapers.length === 0 ? (
                     <p className="text-sm text-zinc-500">No papers yet. Ask the AI to find papers on your topic.</p>
                   ) : (
-                    libraryPapers.map((paper) => {
+                    <>
+                      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50/80 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                        <input
+                          type="checkbox"
+                          checked={selectedLibraryIds.size === libraryPapers.length && libraryPapers.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedLibraryIds(new Set(libraryPapers.map((p) => p.id)));
+                            } else {
+                              setSelectedLibraryIds(new Set());
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-zinc-300 text-pink-600 focus:ring-pink-500"
+                        />
+                        <span>Select all ({libraryPapers.length})</span>
+                      </label>
+                      {selectedLibraryIds.size > 0 && (
+                        <p className="text-xs text-zinc-500">
+                          {selectedLibraryIds.size} selected — next AI chat will focus on these papers.
+                        </p>
+                      )}
+                      {libraryPapers.map((paper) => {
                       const authors = paper.authors ?? [];
                       const showExpand = authors.length > 3;
                       const expanded = authorsExpanded.has(paper.id);
@@ -523,13 +548,29 @@ export default function HomePage() {
                         : paper.publishedYear
                           ? paper.publishedYear
                           : null;
+                      const isSelected = selectedLibraryIds.has(paper.id);
                       return (
                         <div
                           key={paper.id}
-                          className="rounded-lg border border-zinc-200 bg-white p-3 hover:border-pink-300 hover:bg-pink-50"
+                          className={`rounded-lg border p-3 ${isSelected ? "border-amber-200 hover:border-amber-300" : "border-zinc-200 bg-white hover:border-pink-300 hover:bg-pink-50"}`}
+                          style={isSelected ? { background: "#FFFBEC" } : undefined}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 flex-1 items-start gap-2">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setSelectedLibraryIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(paper.id)) next.delete(paper.id);
+                                    else next.add(paper.id);
+                                    return next;
+                                  });
+                                }}
+                                className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-300 text-pink-600 focus:ring-pink-500"
+                              />
+                              <div className="min-w-0 flex-1">
                               <a
                                 href={paper.url ?? `https://arxiv.org/abs/${paper.id}`}
                                 target="_blank"
@@ -574,6 +615,7 @@ export default function HomePage() {
                                 {addedDate && (
                                   <span>Date added to the library: {addedDate}</span>
                                 )}
+                              </div>
                               </div>
                             </div>
                             <div className="flex shrink-0 items-center gap-1">
@@ -625,13 +667,23 @@ export default function HomePage() {
                             </div>
                           </div>
                           {paper.abstract && (
-                            <div className="mt-2">
-                              <p
-                                className={`text-xs text-zinc-600 ${abstractExpanded.has(paper.id) ? "" : "line-clamp-2"}`}
+                            <div className="mt-2 flex flex-wrap items-baseline gap-x-1">
+                              <div
+                                className="min-w-0 flex-1 text-xs text-zinc-600"
                                 title={abstractExpanded.has(paper.id) ? undefined : paper.abstract}
+                                style={
+                                  abstractExpanded.has(paper.id)
+                                    ? undefined
+                                    : {
+                                        display: "-webkit-box",
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: "vertical",
+                                        overflow: "hidden",
+                                      }
+                                }
                               >
                                 {paper.abstract}
-                              </p>
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => setAbstractExpanded((s) => {
@@ -640,7 +692,7 @@ export default function HomePage() {
                                   else next.add(paper.id);
                                   return next;
                                 })}
-                                className="mt-0.5 text-xs text-pink-600 hover:underline"
+                                className="shrink-0 text-xs text-pink-600 hover:underline"
                               >
                                 {abstractExpanded.has(paper.id) ? "collapse" : "expand"}
                               </button>
@@ -648,7 +700,8 @@ export default function HomePage() {
                           )}
                         </div>
                       );
-                    })
+                    })}
+                    </>
                   )}
                 </div>
               )}
@@ -755,14 +808,24 @@ export default function HomePage() {
                       </ReactMarkdown>
                     </div>
                     {extractPapersFromText(msg.text).length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => saveMessageToLibrary(msg.text)}
-                        className="mt-3 flex items-center gap-2 rounded-lg border border-pink-300 bg-pink-50 px-3 py-2 text-sm font-medium text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-950/40 dark:text-pink-300 dark:hover:bg-pink-950/60"
-                      >
-                        <span>Save to library</span>
-                        <span className="text-xs">({extractPapersFromText(msg.text).length} papers)</span>
-                      </button>
+                      savedToLibraryMessageIndices.has(i) ? (
+                        <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400">
+                          <span className="shrink-0 text-green-600 dark:text-green-400">✓</span>
+                          <span>Saved to library</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSavedToLibraryMessageIndices((s) => new Set(s).add(i));
+                            saveMessageToLibrary(msg.text);
+                          }}
+                          className="mt-3 flex items-center gap-2 rounded-lg border border-pink-300 bg-pink-50 px-3 py-2 text-sm font-medium text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-950/40 dark:text-pink-300 dark:hover:bg-pink-950/60"
+                        >
+                          <span>Save to library</span>
+                          <span className="text-xs">({extractPapersFromText(msg.text).length} papers)</span>
+                        </button>
+                      )
                     )}
                   </div>
                 </div>
