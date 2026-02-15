@@ -62,7 +62,11 @@ export async function POST(req: NextRequest) {
       "kbn-xsrf": "true",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ input: inputToAgent, agent_id: AGENT_ID }),
+    body: JSON.stringify({
+      input: inputToAgent,
+      agent_id: AGENT_ID,
+      connector_id: "OpenAI-GPT-4-1-Mini",
+    }),
   });
 
   if (!res.ok) {

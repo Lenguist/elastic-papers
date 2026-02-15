@@ -72,12 +72,13 @@ So: use `semantic_text` + Jina inference endpoint → “Use of JINA” ✅ and 
 - Index: `arxiv-papers-2026` with title, authors, abstract, categories, created
 - ~2k+ papers ingested (can scale to full 2026)
 
-**Missing:**
-- No embeddings (no vector search)
+**Missing (Elastic side):**
+- No embeddings (no vector search) in the index
 - No JINA
-- No Agent Builder
-- No Workflows
-- No UI
+- No Workflows (agent is called directly from app)
+
+**Done (this app):**
+- UI: scope, chat, library (with selection + notes under papers), notes tab (paper bundles), discovery. Chat sends selected library papers to agent for focused context. Library + notes persisted (Neon).
 
 ---
 

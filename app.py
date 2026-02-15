@@ -44,7 +44,11 @@ async def chat(body: dict):
         "kbn-xsrf": "true",
         "Content-Type": "application/json",
     }
-    payload = {"input": message, "agent_id": AGENT_ID}
+    payload = {
+        "input": message,
+        "agent_id": AGENT_ID,
+        "connector_id": "OpenAI-GPT-4-1-Mini",
+    }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
