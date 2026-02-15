@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { getLibrary } from "@/lib/library";
 import { searchPapers, getPaper } from "@/lib/elasticsearch";
 import { searchProjectPapers } from "@/lib/paper-index";
+import { createNote } from "@/lib/notes";
 import type { LibraryPaper } from "@/lib/library-store";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -105,6 +106,31 @@ function buildTools(projectId: string): OpenAI.Chat.Completions.ChatCompletionTo
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "save_to_notes",
+        description:
+          "Save content to the user's project notes. Use this when the user asks you to save, write down, or record " +
+          "something — comparisons, summaries, key findings, analysis, or any research notes. " +
+          "You can optionally link the note to a specific paper by providing its arXiv ID. " +
+          "Always confirm to the user what you saved.",
+        parameters: {
+          type: "object",
+          properties: {
+            content: {
+              type: "string",
+              description: "The note content to save. Use markdown formatting for structure (headers, bullet points, etc.).",
+            },
+            paper_id: {
+              type: "string",
+              description: "Optional arXiv ID to link this note to a specific paper in the library.",
+            },
+          },
+          required: ["content"],
+        },
+      },
+    },
   ];
 }
 
@@ -202,6 +228,23 @@ async function executeDeepResearch(question: string): Promise<string> {
   });
 }
 
+async function executeSaveToNotes(projectId: string, content: string, paperId?: string): Promise<string> {
+  try {
+    const note = await createNote(projectId, content, paperId || undefined);
+    if (!note) {
+      return JSON.stringify({ error: "Failed to save note" });
+    }
+    return JSON.stringify({
+      success: true,
+      note_id: note.id,
+      paper_id: paperId || null,
+      content_length: content.length,
+    });
+  } catch (err) {
+    return JSON.stringify({ error: "Failed to save note: " + (err as Error).message });
+  }
+}
+
 async function executeSearchLibraryPapers(projectId: string, query: string, numResults?: number): Promise<string> {
   const size = Math.min(Math.max(numResults || 6, 1), 15);
   const { results, took, indexName } = await searchProjectPapers(projectId, query, size);
@@ -296,6 +339,9 @@ async function executeTool(
     case "deep_research":
       result = await executeDeepResearch(args.question as string);
       break;
+    case "save_to_notes":
+      result = await executeSaveToNotes(projectId, args.content as string, args.paper_id as string | undefined);
+      break;
     default:
       result = JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -332,12 +378,15 @@ TOOLS:
 - search_library_papers: Search over the FULL TEXT of papers in the user's project library. Each paper's PDF has been chunked and indexed with Jina semantic embeddings. Use this for detailed questions about papers the user is working with (benchmarks, methods, results, comparisons). This is your RAG tool.
 - get_paper_details: Get abstract and metadata for a specific paper by arXiv ID.
 - deep_research: Thorough search via Elastic Agent Builder (10-15s). Only when asked or regular search fails.
+- save_to_notes: Save content to the user's project notes. Optionally link to a specific paper by arXiv ID. Use when the user asks to save, record, or write down findings, comparisons, summaries, or analysis.
 
 WHEN TO USE WHICH TOOL:
 - "Find papers about X" → search_papers (discover new papers)
 - "What benchmarks does paper Y use?" → search_library_papers (answer from library paper full text)
 - "Compare these two papers" → search_library_papers (retrieve relevant sections from both)
+- "Compare and save to notes" → search_library_papers, then save_to_notes with the comparison
 - "Summarize the methods in my library" → search_library_papers
+- "Save this to my notes" → save_to_notes
 - "What's the state of the art in X?" → search_papers first, maybe search_library_papers if library has relevant papers
 
 GUIDELINES:
@@ -347,6 +396,7 @@ GUIDELINES:
 - Be specific and informative. Cite specific passages, numbers, and results from retrieved text.
 - If the user has papers in their library, reference them when relevant.
 - If search results don't seem relevant enough, try rephrasing the query or use deep_research.
+- When saving to notes, write well-structured markdown content. After saving, confirm to the user what was saved.
 
 ${libraryContext ? "\n" + libraryContext + "\n" : ""}`;
 }

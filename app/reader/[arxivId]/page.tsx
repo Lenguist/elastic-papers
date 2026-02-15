@@ -1,14 +1,25 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import ChatSidebar from "@/components/ChatSidebar";
 
 const PDF_URL = (id: string) => `https://arxiv.org/pdf/${id}.pdf`;
 
 export default function ReaderPage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center"><span className="text-zinc-400">Loading...</span></div>}>
+      <ReaderPageInner />
+    </Suspense>
+  );
+}
+
+function ReaderPageInner() {
   const params = useParams<{ arxivId: string }>();
+  const searchParams = useSearchParams();
   const arxivId = params?.arxivId?.replace(/\.pdf$/i, "").replace(/v\d+$/i, "") || "";
+  const projectId = searchParams.get("project");
 
   return (
     <div className="flex h-screen">
@@ -41,7 +52,7 @@ export default function ReaderPage() {
 
       {/* Right sidebar: Chat */}
       <aside className="w-96 shrink-0">
-        <ChatSidebar />
+        <ChatSidebar projectId={projectId} />
       </aside>
     </div>
   );

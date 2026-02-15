@@ -1,114 +1,128 @@
-# Current State & Next Steps (Demo + Elastic Backend)
+# Current State & Next Steps
 
-**Last updated:** After adding notes, persistent storage (library + notes), and “chat about selected papers.” Focus: where the demo stands and what’s needed on the **Elastic/backend** side (including speed).
-
----
-
-## What’s Done
-
-### App & persistence
-| Feature | Status | Notes |
-|--------|--------|------|
-| **Library** | ✅ | Add/remove/approve papers; persisted in **Neon** when `POSTGRES_URL`/`DATABASE_URL` set; in-memory fallback. |
-| **Notes** | ✅ | Create/edit/delete; persisted in same Neon DB; **paper-linked notes** (notes under a paper in Library, bundled by paper in Notes tab). |
-| **Notes tab** | ✅ | Notion-style: “New note” at top, notes grouped by paper + General, chronological within each. |
-| **Library tab** | ✅ | Select all / per-paper checkboxes; **selected papers** drive “focus” for next AI chat. |
-| **Chat about selected papers** | ✅ | When you select papers in Library, the next chat request sends `selected_paper_ids`; agent context is **only those papers** (smaller, focused context). |
-| **Discovery** | ✅ | `/discovery` – trending papers by category (arXiv API), Add to library. |
-| **Save to library (AI)** | ✅ | One-time “Save to library (N papers)” per message; then shows “Saved to library.” |
-| **Scope + agent** | ✅ | User sets research scope; chat calls Kibana Agent Builder `converse` with library (or selected) context. |
-
-### Backend (this repo)
-- **Neon:** Library + notes tables, schema in `scripts/schema.sql`, optional `scripts/migrate-notes-paper-id.sql` for existing DBs.
-- **Chat API:** `POST /api/chat` → builds library (or selected) context, sends to Kibana `POST .../api/agent_builder/converse` with `input` + `agent_id`.
-- **No Elasticsearch in this repo:** Search and agent live in **Elastic Cloud / Kibana** (Agent Builder). This app only calls the Kibana API.
-
-### Documentation
-- **data-persistence-library-notes.md** – Library + notes persistence, Neon checklist.
-- **elastic-agent-add-to-library-tool.md** – How to give the agent add/remove library tools (HTTP tools or workflow).
-- **killer-demo-full-implementation-plan.md** – Full demo flow: search → compare → eval on benchmark → save to notes.
-- **PLAN.md** – Prize checklist, semantic search (Jina/semantic_text), Agent Builder, Workflows.
-- **discovery-page-ideas.md** – Discovery features (trending, categories, Add to library).
+**Last updated:** Feb 15 2026 — after adding OpenAI orchestrator with ES tools, per-project Jina RAG indexing, Discovery recommendations, full PDF extraction pipeline.
 
 ---
 
-## Where This Sits vs the “Killer Demo” Plan
+## What's Done
 
-From **killer-demo-full-implementation-plan.md**:
+### Core Features
+| Feature | Status | Details |
+|---------|--------|---------|
+| **Projects** | ✅ | Create / list / delete projects. Auto-generated names via OpenAI. Persisted in Neon. |
+| **Library** | ✅ | Add/remove/approve papers; persisted in Neon. Per-paper checkboxes for focused chat context. |
+| **Paper ingestion pipeline** | ✅ | Add paper → fetch arXiv metadata → extract full text (HTML endpoint) → extract GitHub links → chunk text → index into per-project ES index with Jina semantic embeddings. All async, non-blocking. |
+| **Notes** | ✅ | Create/edit/delete. General + paper-linked. Notion-style grouping by paper. Persisted in Neon. |
+| **Code tab** | ✅ | GitHub repos auto-extracted from paper full text and abstracts. Displayed per-paper. |
+| **AI Chat (OpenAI orchestrator)** | ✅ | GPT-4o-mini with tool-use loop (up to 5 rounds). 4 tools: `search_papers`, `search_library_papers`, `get_paper_details`, `deep_research`. Multi-turn conversation with history. |
+| **Search — global** | ✅ | Semantic search via Jina (`arxiv-papers-2026-jina` index, `semantic_text` field). Falls back to keyword search on `arxiv-papers-2026`. |
+| **Search — library RAG** | ✅ | Semantic search over per-project paper chunks (`project-library-{id}` indices with Jina `.jina-embeddings-v3`). Passage-level retrieval for deep questions. |
+| **Deep research** | ✅ | Elastic Agent Builder integration as a tool — Kibana `converse` API. Slower but more thorough. |
+| **Discovery — browse** | ✅ | `/discovery` — recent papers by arXiv category (cs.AI, cs.LG, cs.CV, cs.CL, cs.GR). |
+| **Discovery — recommendations** | ✅ | ES `more_like_this` over library papers' titles+abstracts against global index. Excludes papers already in library. "For you" / "Browse" toggle. |
+| **Save to library from AI** | ✅ | Structured paper cards in chat responses with select/add-to-library. Also fallback for markdown-linked papers. |
+| **Selected papers context** | ✅ | Select papers in library → next chat only sends those as context. |
+| **PDF Reader** | ⚠️ | `/reader/[arxivId]` — iframe PDF viewer + ChatSidebar. ChatSidebar doesn't pass `project_id` to chat API (minor bug). |
 
-| Step | Plan | Current state |
-|------|------|----------------|
-| **Search papers** | Elastic / chat | ✅ Via Kibana agent (you have it). |
-| **Add to library** | User or agent | ✅ UI + API; agent can use HTTP tools (doc’d). |
-| **Compare two papers** | Library context + instruction to compare + save | ⚠️ Context is there (library/selected); **agent prompt/tools** need to “compare and optionally save to notes.” |
-| **Save to notes** | Notes store + `save_to_notes` agent tool | ✅ Notes API + UI; **agent still needs a `save_to_notes` HTTP tool** so it can write comparison/eval into notes. |
-| **Eval on 3rd benchmark** | `run_benchmark` + Modal (or Docker) | ❌ Not built; Phase 2 in the plan. |
+### Backend / Elastic
+| Component | Status | Details |
+|-----------|--------|---------|
+| **Elasticsearch Cloud** | ✅ | Elastic Cloud deployment (9.x). |
+| **Main index (keyword)** | ✅ | `arxiv-papers-2026` — ~2k+ papers, title/abstract/authors/categories/created. |
+| **Main index (Jina)** | ✅ | `arxiv-papers-2026-jina` — same papers with `abstract_semantic` as `semantic_text` + Jina inference. |
+| **Per-project indices** | ✅ | `project-library-{id}` — paper chunks with `chunk_semantic` as `semantic_text` + `.jina-embeddings-v3`. Created on-demand when papers are added. |
+| **Jina Embeddings v3** | ✅ | Configured as Elastic inference endpoint (`.jina-embeddings-v3`). Used for both global search and per-project RAG. |
+| **Elastic Agent Builder** | ✅ | `basic-arxiv-assistant` agent. Called via `deep_research` tool. |
+| **Neon (PostgreSQL)** | ✅ | Projects, library, notes tables. Schema in `scripts/schema.sql` / `scripts/schema-v2.sql`. |
 
-So: **persistence and “chat about selected papers” are in place.** To close the loop you still need:
-1. **Agent tools:** `save_to_notes` (and optionally `add_to_library` if not already configured).
-2. **Elastic/backend:** Faster, more reliable search + agent (see below).
-3. **Optional:** `run_benchmark` + runner for the “eval on Paper C’s benchmark” step.
-
----
-
-## Prize Requirements (Quick Check)
-
-| Requirement | Status | Where |
-|-------------|--------|--------|
-| Best end-to-end Agentic system | 🔶 In progress | Agent + library + notes + selected-papers context; needs tools + speed. |
-| Depth & creativity of ES implementation | 🔶 | Depends on Elastic side: semantic search, Jina, aggregations, etc. |
-| Use of JINA for embeddings | ❓ | In **Elastic** (index/ingestion), not in this app. See PLAN.md. |
-| Elastic Agent Builder | ✅ | Chat uses Agent Builder `converse` API. |
-| Elastic Workflows | ❓ | Could wrap agent + tools in a workflow (doc’d for add/remove library). |
-| Elastic Cloud | ✅ | KIBANA_URL + KIBANA_API_KEY point at Elastic Cloud. |
-
----
-
-## The Slowness Problem: Elastic / Backend
-
-You’re right that **more needs to happen on the Elastic side**; the app is just a client.
-
-- **Where the delay is:**  
-  Latency is almost certainly in (1) **Kibana Agent Builder** (model + tools) and/or (2) **Elasticsearch** (e.g. search or retrieval the agent uses). This repo only does a single `POST` to `converse` and waits for the answer.
-
-- **What would help on the Elastic/backend side:**
-  1. **Faster search**  
-     - Use **semantic search** (e.g. `semantic_text` or kNN with Jina embeddings) so the agent gets better results with fewer queries.  
-     - Tune index (size, refresh, replicas) and queries (limit size, avoid heavy aggregations in the hot path).
-  2. **Agent configuration**  
-     - Give the agent **tools** (e.g. `semantic_search`, `get_paper`, `add_to_library`, `save_to_notes`) so it doesn’t rely on one giant “do everything” step.  
-     - Keep prompts and context concise; you’re already helping by sending **only selected papers** when the user has made a selection.
-  3. **JINA (prize)**  
-     - Use Jina for embeddings in **Elastic**: inference endpoint for `semantic_text` or ingest pipeline that calls Jina and stores vectors. All in Elastic Cloud/Kibana, not in this Next.js app.
-  4. **Workflows (optional)**  
-     - A workflow that runs “search → agent with tools” can make the pipeline clearer and easier to optimize (caching, timeouts, retries).
-
-**Concrete next steps for “backend / Elastic”:**
-- In **Kibana / Elastic Cloud:**  
-  - Add or tune **semantic search** (and Jina if available) so the agent’s search step is fast and good.  
-  - Expose **agent tools** (e.g. `save_to_notes`, `add_to_library`) and ensure the agent is configured to use them with small, focused context.  
-- In **this repo:**  
-  - You can add a **Notes API** doc for the agent: `POST /api/notes` with `{ content, paper_id? }` so the agent’s `save_to_notes` tool has a clear spec.  
-  - Optional: **streaming** from the chat API (if Kibana supports it) so the UI can show tokens as they arrive and feel faster.
+### Persistence
+- **Neon DB** for: projects, library papers (with metadata, abstracts, GitHub links), notes (general + paper-linked)
+- **Elasticsearch** for: global paper search, per-project full-text RAG indices
+- **In-memory fallback** if no DB configured
 
 ---
 
-## Docs to Update (Stale Bits)
+## Prize Requirements
 
-- **killer-demo-full-implementation-plan.md**  
-  - Phase 1 (Notes + save_to_notes): **Notes are done** in the app; update to “Add agent tool `save_to_notes` that calls `POST /api/notes`.”
-  - Demo script: add a line about “select papers in Library, then ask a follow-up” to show selected-papers context.
-- **data-persistence-library-notes.md**  
-  - Already states notes use the same DB as library; optional: one sentence that notes can be linked to a paper (`paper_id`).
-- **PLAN.md**  
-  - “No UI” is outdated; “Current state” could add one line: “UI: scope, chat, library (with selection), notes (with paper bundles), discovery.”
+| Requirement | Status | Where / How |
+|-------------|--------|-------------|
+| Best end-to-end Agentic system | ✅ | OpenAI orchestrator with 4 ES-backed tools, multi-turn conversation, library/notes/code management, per-project RAG. |
+| Depth & creativity of ES implementation | ✅ | Semantic search (Jina), per-project RAG indices, `more_like_this` recommendations, keyword fallback, Agent Builder integration. Multiple index types. |
+| Use of JINA for embeddings | ✅ | Jina v3 via Elastic Inference — used in both global index (`arxiv-papers-2026-jina`) and per-project library indices (`semantic_text` + `.jina-embeddings-v3`). |
+| Elastic Agent Builder | ✅ | `deep_research` tool calls Agent Builder `converse` API for thorough multi-step queries. |
+| Elastic Workflows | ⚠️ | Not explicitly used as a named Workflow. The tool-use loop in the chat API is functionally a workflow (search → RAG → answer). Could wrap in a Kibana Workflow for extra credit. |
+| Elastic Cloud | ✅ | All ES operations against Elastic Cloud. Cloud ID + API Key auth. |
 
 ---
 
-## Summary
+## What's Missing / Can Improve (2-hour sprint)
 
-- **App side:** Library + notes are persisted (Neon). You can chat about **selected papers** only. Notes are under papers in Library and grouped in the Notes tab. Discovery and “Save to library” from AI are in place.
-- **Demo gap:** Agent needs **tools** (`save_to_notes`, and optionally `add_to_library`) and, for the full “killer” flow, a **run_benchmark**-style step (later).
-- **Slowness:** Addressed mainly in **Elastic**: faster semantic search (and Jina), lean agent tools, and smaller context (you already send selected papers). This repo can support that with a clear Notes API spec for the agent and optional streaming later.
+### High Priority (directly improves demo / prize)
+| Task | Effort | Impact |
+|------|--------|--------|
+| **Fix Reader page** — pass `project_id` to ChatSidebar | 10 min | Fixes broken reader chat |
+| **Ingest more papers** — run ingestion to bulk up the main index (currently ~2k) | 15 min | Better search results, better recommendations |
+| **Add Elastic Workflow** — even a simple one wrapping search → agent | 30-60 min | Checks the "Workflows" prize box |
+| **Demo script** — write a step-by-step demo flow to follow during presentation | 20 min | Smooth demo |
 
-If you want, next we can (1) add a short **agent-tools** doc that specifies `POST /api/notes` for `save_to_notes`, or (2) paste a short “Elastic backend checklist” (semantic search, Jina, agent tools) into PLAN.md or this file.
+### Medium Priority (polish)
+| Task | Effort | Impact |
+|------|--------|--------|
+| **Streaming chat responses** — show tokens as they arrive | 1-2 hrs | Feels much faster |
+| **Delete project → clean up ES index** — `deleteProjectIndex()` exists but isn't called on project delete | 10 min | Cleanup |
+| **Error states in UI** — some background tasks fail silently | 30 min | Better UX |
+| **Reader ChatSidebar project context** | 15 min | Paper-specific chat works fully |
+
+### Lower Priority (nice-to-have)
+| Task | Effort | Impact |
+|------|--------|--------|
+| **Agent `save_to_notes` tool** — let the AI write notes directly | 30 min | Cool demo moment |
+| **Hybrid search** — combine keyword + semantic for better results | 30 min | Better search quality |
+| **More arXiv categories** in Discovery browse | 5 min | Broader exploration |
+
+### Not doing now (future / post-hackathon)
+- Modal code execution ("get paper's code running")
+- Cross-paper benchmark comparisons
+- Dataset management
+- Research alerts
+- Collaborative projects
+
+---
+
+## Architecture Summary
+
+```
+User → Next.js UI (React 19 / Tailwind)
+  ├── /discovery → Recommendations (ES more_like_this) + Browse (arXiv API)
+  ├── / (chat)   → POST /api/chat
+  │                  ├── OpenAI GPT-4o-mini (orchestrator)
+  │                  │    ├── search_papers      → ES semantic search (Jina)
+  │                  │    ├── search_library_papers → ES per-project RAG (Jina)
+  │                  │    ├── get_paper_details   → ES get by ID
+  │                  │    └── deep_research       → Elastic Agent Builder
+  │                  └── Library context from Neon DB
+  ├── /projects  → Neon DB CRUD
+  └── /reader    → PDF iframe + chat sidebar
+
+Paper ingestion (background, on library add):
+  arXiv metadata → HTML full text → chunk → ES index (Jina semantic_text)
+```
+
+---
+
+## Files Reference
+
+| Area | Key Files |
+|------|-----------|
+| Chat API | `app/api/chat/route.ts` |
+| Library API | `app/api/library/route.ts`, `lib/library.ts`, `lib/db.ts` |
+| Notes API | `app/api/notes/route.ts`, `app/api/notes/[id]/route.ts` |
+| Projects API | `app/api/projects/route.ts` |
+| Discovery API | `app/api/discovery/trending/route.ts`, `app/api/discovery/recommendations/route.ts` |
+| ES global search | `lib/elasticsearch.ts` |
+| ES per-project RAG | `lib/paper-index.ts` |
+| ES recommendations | `lib/recommendations.ts` |
+| Paper extraction | `lib/pdf-extract.ts` |
+| arXiv API | `lib/arxiv.ts` |
+| DB (Neon) | `lib/db.ts`, `scripts/schema.sql` |
+| Pages | `app/page.tsx`, `app/discovery/page.tsx`, `app/projects/page.tsx`, `app/reader/[arxivId]/page.tsx` |

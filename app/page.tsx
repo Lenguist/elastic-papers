@@ -436,7 +436,7 @@ function HomePageInner() {
 
         {/* Large white layer - contains all content */}
         <div
-          className="absolute flex flex-col items-center justify-center"
+          className="absolute flex flex-col items-center justify-center overflow-hidden"
           style={{
             left: 'calc(3.7vw)',
             top: 'calc(5.7vh)',
@@ -446,9 +446,31 @@ function HomePageInner() {
             borderRadius: '40px',
           }}
         >
+          {/* Falling emoji animation */}
+          <style>{`
+            @keyframes fall {
+              0% { transform: translateY(-120px) rotate(0deg); opacity: 0; }
+              3% { opacity: 0; }
+              6% { opacity: 0.7; }
+              85% { opacity: 0.7; }
+              100% { transform: translateY(calc(90vh)) rotate(20deg); opacity: 0; }
+            }
+          `}</style>
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
+            <span style={{ position: 'absolute', top: '-120px', left: '3%', fontSize: '20px', opacity: 0, animation: 'fall 7s linear infinite', animationDelay: '0s', animationFillMode: 'backwards' }}>📄</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '8%', fontSize: '22px', opacity: 0, animation: 'fall 6s linear infinite', animationDelay: '1.5s', animationFillMode: 'backwards' }}>💻</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '14%', fontSize: '18px', opacity: 0, animation: 'fall 8s linear infinite', animationDelay: '4s', animationFillMode: 'backwards' }}>🔬</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '18%', fontSize: '16px', opacity: 0, animation: 'fall 7.5s linear infinite', animationDelay: '2s', animationFillMode: 'backwards' }}>📊</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '82%', fontSize: '20px', opacity: 0, animation: 'fall 6.5s linear infinite', animationDelay: '0.5s', animationFillMode: 'backwards' }}>📚</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '86%', fontSize: '24px', opacity: 0, animation: 'fall 5.5s linear infinite', animationDelay: '3s', animationFillMode: 'backwards' }}>🧠</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '90%', fontSize: '18px', opacity: 0, animation: 'fall 7s linear infinite', animationDelay: '1s', animationFillMode: 'backwards' }}>✏️</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '94%', fontSize: '22px', opacity: 0, animation: 'fall 6s linear infinite', animationDelay: '3.5s', animationFillMode: 'backwards' }}>🔍</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '6%', fontSize: '16px', opacity: 0, animation: 'fall 8s linear infinite', animationDelay: '2.5s', animationFillMode: 'backwards' }}>📝</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '92%', fontSize: '20px', opacity: 0, animation: 'fall 6.5s linear infinite', animationDelay: '0.8s', animationFillMode: 'backwards' }}>🎓</span>
+          </div>
           <div className="w-full max-w-3xl px-8">
             {/* Logo & Title */}
-            <div className="mb-12 text-center">
+            <div className="mb-4 text-center">
               <h1 className="flex items-start justify-center gap-3" style={{ fontFamily: 'Lato', fontStyle: 'italic', fontWeight: 900, fontSize: '45px', lineHeight: '54px', textAlign: 'center', color: '#AF247B' }}>
                 <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)' }}>
                   research
@@ -462,6 +484,16 @@ function HomePageInner() {
                   atelier
                 </span>
               </h1>
+              <p style={{ fontFamily: 'Lato', fontSize: '16px', fontWeight: 400, color: '#231F1F', marginTop: '-22px', letterSpacing: '0.02em', position: 'relative', zIndex: 1 }}>
+                Research tailored to you.
+              </p>
+              <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px', position: 'relative', zIndex: 1 }}>
+                <div style={{ width: '220px', height: '2px', background: '#AF247B' }} />
+                <div style={{ width: '220px', height: '2px', background: '#AF247B' }} />
+              </div>
+              <p style={{ fontFamily: 'Lato', fontSize: '14px', fontWeight: 400, color: '#231F1F', marginTop: '16px', lineHeight: '1.6', maxWidth: '520px', marginLeft: 'auto', marginRight: 'auto' }}>
+                Create a project to explore a topic with an AI research workspace — discover papers, ask questions, and organize what you learn in one place.
+              </p>
             </div>
 
             {/* Search-style input */}
@@ -475,7 +507,7 @@ function HomePageInner() {
                     type="text"
                     value={scopeInput}
                     onChange={(e) => setScopeInput(e.target.value)}
-                    placeholder="Describe your new project..."
+                    placeholder='e.g. "efficient LLM inference on smartNICs"'
                     className="flex-1 text-lg text-zinc-700 placeholder-zinc-400 focus:outline-none"
                   />
                   <button
@@ -524,19 +556,19 @@ function HomePageInner() {
             </form>
 
             {/* Drop zone */}
-            <div className="rounded-3xl border-2 border-dashed border-zinc-300 bg-zinc-50/50 py-8">
+            <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/50 py-4">
               <div className="text-center">
-                <p className="mb-1 text-lg text-zinc-600">or drop your research notes and relevant publications</p>
-                <p className="mb-6 text-sm text-zinc-500">
+                <p className="mb-0.5 text-xs text-zinc-500">or drop your research notes and relevant publications</p>
+                <p className="mb-3 text-[10px] text-zinc-400">
                   pdf, images, docs
                 </p>
 
-                <div className="flex flex-wrap items-center justify-center gap-3">
+                <div className="flex flex-wrap items-center justify-center gap-1.5">
                   <button
                     type="button"
-                    className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-300 bg-white px-6 py-3 text-sm font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
+                    className="inline-flex items-center gap-1 rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-[11px] font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
                   >
-                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                     </svg>
                     Upload files
@@ -544,9 +576,9 @@ function HomePageInner() {
 
                   <button
                     type="button"
-                    className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-300 bg-white px-6 py-3 text-sm font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
+                    className="inline-flex items-center gap-1 rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-[11px] font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
                   >
-                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
                     Websites
@@ -554,9 +586,9 @@ function HomePageInner() {
 
                   <button
                     type="button"
-                    className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-300 bg-white px-6 py-3 text-sm font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
+                    className="inline-flex items-center gap-1 rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-[11px] font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
                   >
-                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                     </svg>
                     Drive
@@ -564,9 +596,9 @@ function HomePageInner() {
 
                   <button
                     type="button"
-                    className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-300 bg-white px-6 py-3 text-sm font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
+                    className="inline-flex items-center gap-1 rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-[11px] font-medium transition-all hover:border-zinc-400 hover:bg-zinc-50"
                   >
-                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     Copied text

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { dbListProjects, dbCreateProject, dbDeleteProject, hasDb } from "@/lib/db";
+import { deleteProjectIndex } from "@/lib/paper-index";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -80,6 +81,13 @@ export async function DELETE(req: NextRequest) {
   const projectId = searchParams.get("id");
   if (!projectId) {
     return NextResponse.json({ error: "id param required" }, { status: 400 });
+  }
+  // Clean up the per-project Elasticsearch index (paper chunks + embeddings)
+  try {
+    await deleteProjectIndex(projectId);
+  } catch (err) {
+    console.error("Failed to delete project ES index:", (err as Error).message);
+    // Continue with DB deletion even if ES cleanup fails
   }
   await dbDeleteProject(projectId);
   return NextResponse.json({ ok: true });

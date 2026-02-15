@@ -2,7 +2,11 @@
 
 import { useState, useRef, useEffect } from "react";
 
-export default function ChatSidebar() {
+type ChatSidebarProps = {
+  projectId?: string | null;
+};
+
+export default function ChatSidebar({ projectId }: ChatSidebarProps) {
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +29,7 @@ export default function ChatSidebar() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, project_id: projectId || undefined }),
       });
       const data = await res.json();
 

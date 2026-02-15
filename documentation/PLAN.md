@@ -54,31 +54,35 @@ So: use `semantic_text` + Jina inference endpoint → “Use of JINA” ✅ and 
 
 ## Prize Requirements Checklist
 
-| Requirement | Status | How We'll Address It |
-|-------------|--------|----------------------|
-| Best end-to-end Agentic system | ⬜ | Agent Builder + multi-step workflows |
-| Depth & creativity of ES implementation | ⬜ | Hybrid search, aggregations, nested docs, custom tools |
-| Use of JINA for embeddings | ⬜ | Jina v3 via Elastic Inference Service or Jina API |
-| Use of Elastic Agent Builder | ⬜ | Custom agent with arXiv tools |
-| Use of Elastic Workflows | ⬜ | Workflow that chains search + aggregation + agent |
-| Use of Elastic Cloud | ✅ | Already using ES Cloud |
+| Requirement | Status | How We Address It |
+|-------------|--------|-------------------|
+| Best end-to-end Agentic system | ✅ | OpenAI orchestrator with 4 ES-backed tools (search, RAG, get, Agent Builder), multi-turn tool-use loop, library/notes/code management |
+| Depth & creativity of ES implementation | ✅ | Jina semantic search, per-project RAG indices, `more_like_this` recommendations, keyword fallback, Agent Builder as deep-research tool, multiple index types |
+| Use of JINA for embeddings | ✅ | Jina v3 (`.jina-embeddings-v3`) via Elastic Inference — global index + per-project library indices use `semantic_text` |
+| Use of Elastic Agent Builder | ✅ | `basic-arxiv-assistant` agent, called via `deep_research` tool through Kibana `converse` API |
+| Use of Elastic Workflows | ⚠️ | Tool-use loop is functionally a workflow; could wrap in a named Kibana Workflow for full credit |
+| Use of Elastic Cloud | ✅ | All ES operations on Elastic Cloud (Cloud ID + API Key) |
 
 ---
 
 ## Current State
 
-**Done:**
-- arXiv OAI-PMH ingestion → Elasticsearch Cloud
-- Index: `arxiv-papers-2026` with title, authors, abstract, categories, created
-- ~2k+ papers ingested (can scale to full 2026)
+**Elasticsearch indices:**
+- `arxiv-papers-2026` — ~2k+ papers, keyword search (title, abstract, authors, categories)
+- `arxiv-papers-2026-jina` — same papers with `semantic_text` + Jina embeddings on abstract
+- `project-library-{id}` — per-project paper chunk indices with Jina `semantic_text` (created on-demand)
 
-**Missing (Elastic side):**
-- No embeddings (no vector search) in the index
-- No JINA
-- No Workflows (agent is called directly from app)
+**App features (all working):**
+- UI: projects, chat (OpenAI + ES tools), library (selection, approve, notes, GitHub links), notes tab, code tab, discovery (recommendations + browse), PDF reader
+- Chat: GPT-4o-mini orchestrator with `search_papers`, `search_library_papers`, `get_paper_details`, `deep_research` tools
+- Paper pipeline: add to library → arXiv metadata → HTML full text extraction → chunking → Jina semantic indexing (per-project ES index)
+- Discovery: `more_like_this` recommendations from library, arXiv category browse
+- Persistence: Neon PostgreSQL (projects, library, notes)
 
-**Done (this app):**
-- UI: scope, chat, library (with selection + notes under papers), notes tab (paper bundles), discovery. Chat sends selected library papers to agent for focused context. Library + notes persisted (Neon).
+**Still missing:**
+- Elastic Workflows (named workflow in Kibana)
+- Streaming chat responses
+- Modal code execution (future)
 
 ---
 
