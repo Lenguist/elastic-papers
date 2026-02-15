@@ -1,41 +1,28 @@
 /**
- * Derive Modal endpoint URLs from the base MODAL_ENDPOINT_URL env var.
+ * Modal endpoint URLs for the paper-demo-runner app.
  *
- * MODAL_ENDPOINT_URL should be any one of the deployed function URLs, e.g.:
- *   https://user--paper-demo-runner-create-sandbox.modal.run
- *   https://user--paper-demo-runner-deploy-demo.modal.run
- *
- * We extract the base (everything before the last function name) and build
- * all three sandbox endpoint URLs from it.
+ * Uses MODAL_ENDPOINT_BASE if set, otherwise derives from MODAL_ENDPOINT_URL,
+ * otherwise falls back to the known deployed URL.
  */
 
 function getBase(): string {
-  const url = process.env.MODAL_ENDPOINT_URL || "";
-  // Pattern: https://USER--APP-NAME-FUNCTION-NAME.modal.run
-  // We need: https://USER--APP-NAME-
-  const match = url.match(/^(https:\/\/[^/]+--)([^.]+)(\.modal\.run.*)$/);
-  if (match) {
-    // match[1] = "https://user--"
-    // match[2] = "paper-demo-runner-FUNCTION"  
-    // match[3] = ".modal.run..."
-    const prefix = match[1];
-    const middle = match[2];
-    const suffix = match[3];
-    // Remove the function name from middle (last segment after app name)
-    // App name is "paper-demo-runner", function names are "create-sandbox", "exec-command", etc.
-    // The app name part has the format: APP-NAME-FUNCTION-NAME
-    // We need to find where the app name ends and function name begins
-    // Since we know our app is "paper-demo-runner", let's use that
-    const appName = "paper-demo-runner";
-    const appIdx = middle.indexOf(appName);
-    if (appIdx >= 0) {
-      const baseMiddle = middle.slice(0, appIdx + appName.length);
-      return `${prefix}${baseMiddle}`;
-    }
-    return `${prefix}${middle}`;
+  // Option 1: explicit base (recommended)
+  // e.g. "https://maksym-d-bondarenko--paper-demo-runner"
+  if (process.env.MODAL_ENDPOINT_BASE) {
+    return process.env.MODAL_ENDPOINT_BASE;
   }
-  // Fallback: try simple replacement
-  return url;
+
+  // Option 2: derive from any function URL
+  const url = process.env.MODAL_ENDPOINT_URL || "";
+  if (url) {
+    const match = url.match(/^(https:\/\/[^/]+--paper-demo-runner)/);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  // Option 3: hardcoded fallback
+  return "https://maksym-d-bondarenko--paper-demo-runner";
 }
 
 export function getCreateSandboxUrl(): string {

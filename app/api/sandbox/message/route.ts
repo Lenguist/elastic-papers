@@ -4,7 +4,7 @@ import { getSession, addMessage, addStep } from "@/lib/sandbox-session";
 import { getExecCommandUrl } from "@/lib/modal-urls";
 
 const CLAUDE_MODEL = process.env.CLAUDE_SANDBOX_MODEL || "claude-sonnet-4-20250514";
-const MAX_TOOL_ROUNDS = 15; // max tool-use rounds per turn
+const MAX_TOOL_ROUNDS = 200; // max tool-use rounds per turn
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -237,6 +237,12 @@ export async function POST(req: NextRequest) {
           claudeMessages.push({ role: "user", content: toolResults });
 
           toolRounds++;
+        }
+
+        if (toolRounds >= MAX_TOOL_ROUNDS) {
+          emit("message", {
+            text: `Reached the step limit (${MAX_TOOL_ROUNDS} commands). Send another message to continue where I left off.`,
+          });
         }
 
         emit("done", {});
