@@ -1,327 +1,313 @@
 """
-Modal deployment agent — spins up a sandbox, clones a GitHub repo,
-and uses Claude as a coding agent to get it running.
+Modal sandbox manager — creates persistent sandboxes, execs commands,
+and terminates them. The Claude agent loop runs in Next.js; this is
+just the infrastructure layer.
+
+Uses a warm pool of pre-created sandboxes so users don't wait for cold starts.
 
 Deploy:  modal deploy modal_runner/app.py
-Serve (dev):  modal serve modal_runner/app.py
-
-The deployed function exposes an HTTPS endpoint that the Next.js app calls.
+Then warm the pool:  curl -X POST https://YOUR--paper-demo-runner-warm-pool.modal.run
 """
 
 import modal
-import subprocess
-import os
 import json
+import os
 import time
-import textwrap
-
-# ---------------------------------------------------------------------------
-# Modal app & image
-# ---------------------------------------------------------------------------
 
 app = modal.App("paper-demo-runner")
 
-# Pre-install common ML/science packages so the agent doesn't pip-install
-# from scratch every time.  Keeps runs fast for typical paper repos.
-base_image = (
+# Light image for the web endpoint functions (needs FastAPI)
+function_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]")
+
+# Lightweight sandbox image — just git + basic dev tools.
+# The Claude agent installs project-specific packages as needed via pip/npm/etc.
+sandbox_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install(
         "git", "curl", "wget", "build-essential",
-        "ffmpeg", "libsm6", "libxext6", "libgl1",
-        "cmake", "pkg-config",
+        "file", "vim", "less", "unzip", "jq",
+        "pkg-config", "cmake",
     )
-    .pip_install(
-        # --- agent driver ---
-        "anthropic",
-        # --- common ML / data science ---
-        "numpy", "pandas", "scipy", "scikit-learn",
-        "matplotlib", "seaborn", "pillow",
-        # --- deep learning (CPU — keeps image small, agent can install GPU torch if needed) ---
-        "torch==2.5.1+cpu", "torchvision==0.20.1+cpu", "torchaudio==2.5.1+cpu",
-        extra_options="--extra-index-url https://download.pytorch.org/whl/cpu",
-    )
-    .pip_install(
-        # --- NLP / LLM ---
-        "transformers", "datasets", "tokenizers", "accelerate", "sentencepiece",
-        # --- web frameworks (for Gradio / Streamlit demos) ---
-        "gradio", "fastapi", "uvicorn",
-        # --- utilities ---
-        "requests", "httpx", "tqdm", "pyyaml", "jsonlines",
-        "python-dotenv", "click", "rich",
-    )
+    .pip_install("pip", "setuptools", "wheel")
+    .run_commands("curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs")
 )
 
-# ---------------------------------------------------------------------------
-# Claude coding-agent loop
-# ---------------------------------------------------------------------------
+SANDBOX_TIMEOUT = 3600   # 1 hour max lifetime
+POOL_TARGET = 3          # keep this many warm sandboxes ready
 
-AGENT_SYSTEM_PROMPT = textwrap.dedent("""\
-    You are a deployment agent.  Your job is to get a GitHub repository
-    running inside this container.
-
-    You have ONE tool: execute_command — it runs a shell command and returns
-    stdout + stderr.  Use it to explore the repo, read the README, install
-    dependencies, and run the code.
-
-    RULES:
-    1. Start by listing files (ls) and reading the README (cat README.md or
-       similar).
-    2. Follow the README's setup instructions.  If there is no README, look
-       for setup.py, pyproject.toml, requirements.txt, Makefile, Dockerfile,
-       etc. and infer what to do.
-    3. When you pip-install, always use --quiet to reduce noise.
-    4. If a command fails, read the error carefully, try to fix it (install
-       missing packages, downgrade versions, etc.), and retry.  Be
-       resourceful — try at most 3 fixes per error before moving on.
-    5. If the repo is a web app (Gradio, Streamlit, FastAPI), start it in the
-       background (e.g. `nohup python app.py &`) and verify it's listening
-       (curl localhost:<port>).  Report the port.
-    6. If the repo is a script or notebook, run its main entry point and
-       report the output.
-    7. If the repo requires a GPU and none is available, try to patch it to
-       run on CPU (e.g. device="cpu").  If that's not feasible, say so.
-    8. If the repo requires large model downloads (>2 GB), mention it and
-       attempt a smaller variant if one exists.
-    9. Keep commands short and check results between each step.  Do not chain
-       many commands with &&.
-    10. When you are DONE — either it's running or you've determined it can't
-        run — write a clear summary as your final text response.  Include:
-        - Whether it succeeded or failed
-        - What the code does
-        - The final output or the error you couldn't resolve
-        - If it's a web server, the port it's listening on
-
-    CONSTRAINTS:
-    - You have no GPU (CPU only).
-    - You have internet access.
-    - Working directory is the repo root.
-    - Timeout per command is 120 seconds.
-    - Total budget: 25 steps.  Be efficient.
-""")
-
-AGENT_TOOLS = [
-    {
-        "name": "execute_command",
-        "description": (
-            "Execute a shell command in the container.  Returns stdout, stderr, "
-            "and exit code.  Timeout: 120 s.  Working directory is the repo root "
-            "unless you cd elsewhere."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to run.",
-                },
-            },
-            "required": ["command"],
-        },
-    }
-]
-
-# How many agent iterations before we give up
-MAX_AGENT_STEPS = 25
-# How long a single shell command can run (seconds)
-COMMAND_TIMEOUT = 120
-# Claude model to use for the sub-agent
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+# Distributed dict to persist pool state across function invocations
+pool_dict = modal.Dict.from_name("sandbox-pool", create_if_missing=True)
 
 
-def _run_command(cmd: str, cwd: str) -> dict:
-    """Run a shell command and return structured output."""
+# ─── Pool helpers ─────────────────────────────────────────────────────────────
+
+def _get_pool_ids() -> list:
+    """Read the list of pre-warmed sandbox IDs from the distributed dict."""
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
-        )
-        stdout = result.stdout
-        stderr = result.stderr
-        # Truncate very long outputs to stay within Claude's context window
-        if len(stdout) > 8000:
-            stdout = stdout[:2000] + "\n\n... [truncated middle] ...\n\n" + stdout[-4000:]
-        if len(stderr) > 4000:
-            stderr = stderr[:1000] + "\n\n... [truncated] ...\n\n" + stderr[-2000:]
+        raw = pool_dict.get("ids")
+        return json.loads(raw) if raw else []
+    except Exception:
+        return []
+
+
+def _set_pool_ids(ids: list):
+    """Write the list of sandbox IDs to the distributed dict."""
+    pool_dict["ids"] = json.dumps(ids)
+
+
+def _claim_sandbox():
+    """Try to grab a pre-warmed sandbox from the pool. Returns (Sandbox, id) or None."""
+    ids = _get_pool_ids()
+    while ids:
+        sid = ids.pop(0)
+        _set_pool_ids(ids)  # save immediately so another request doesn't grab the same one
+        try:
+            sb = modal.Sandbox.from_id(sid)
+            print(f"✅ Claimed pre-warmed sandbox {sid} (pool now {len(ids)})")
+            return sb, sid
+        except Exception:
+            print(f"⚠️  Pool sandbox {sid} expired, skipping")
+            continue
+    return None
+
+
+# ─── Replenish pool (background function) ────────────────────────────────────
+
+@app.function(timeout=600, image=function_image)
+def replenish_pool():
+    """Create sandboxes to fill the pool back up to POOL_TARGET."""
+    ids = _get_pool_ids()
+
+    # Prune dead sandboxes
+    alive = []
+    for sid in ids:
+        try:
+            modal.Sandbox.from_id(sid)
+            alive.append(sid)
+        except Exception:
+            print(f"  Pruned expired sandbox {sid}")
+
+    needed = max(0, POOL_TARGET - len(alive))
+    print(f"Pool status: {len(alive)} alive, need {needed} more")
+
+    for i in range(needed):
+        try:
+            sb = modal.Sandbox.create(image=sandbox_image, app=app, timeout=SANDBOX_TIMEOUT)
+            alive.append(sb.object_id)
+            print(f"  Created pool sandbox {i+1}/{needed}: {sb.object_id}")
+        except Exception as e:
+            print(f"  Failed to create pool sandbox: {e}")
+
+    _set_pool_ids(alive)
+    return {"pool_size": len(alive), "created": needed}
+
+
+# ─── Warm pool endpoint (call after deploy or on-demand) ─────────────────────
+
+@app.function(timeout=600, image=function_image)
+@modal.fastapi_endpoint(method="POST")
+def warm_pool(request: dict = {}):
+    """
+    POST /warm_pool — fill the sandbox pool to POOL_TARGET.
+    Call this after deploying or anytime you want warm sandboxes ready.
+    """
+    result = replenish_pool.remote()
+    return result
+
+
+# ─── Pool status endpoint ────────────────────────────────────────────────────
+
+@app.function(timeout=30, image=function_image)
+@modal.fastapi_endpoint(method="GET")
+def pool_status():
+    """GET /pool_status — check how many sandboxes are in the pool."""
+    ids = _get_pool_ids()
+    alive = 0
+    for sid in ids:
+        try:
+            modal.Sandbox.from_id(sid)
+            alive += 1
+        except Exception:
+            pass
+    return {"pool_size": alive, "target": POOL_TARGET, "raw_ids": len(ids)}
+
+
+# ─── Create sandbox ──────────────────────────────────────────────────────────
+
+@app.function(timeout=300, image=function_image)
+@modal.fastapi_endpoint(method="POST")
+def create_sandbox(request: dict):
+    """
+    POST: { "repo_url": "https://github.com/...", "env_vars": { "KEY": "val" } }
+
+    Grabs a pre-warmed sandbox from the pool (fast) or creates one on-demand (slower).
+    Then clones the repo and writes env vars into it.
+    """
+    try:
+        repo_url = request.get("repo_url", "").strip()
+        env_vars = request.get("env_vars", {})
+
+        if not repo_url:
+            return {"error": "repo_url is required"}
+        if not repo_url.startswith("https://github.com/"):
+            return {"error": "Only public GitHub HTTPS URLs are supported."}
+
+        # 1) Try to claim a pre-warmed sandbox from the pool
+        claimed = _claim_sandbox()
+        if claimed:
+            sb, sandbox_id = claimed
+            from_pool = True
+        else:
+            # Fallback: create on-demand
+            print(f"Pool empty — creating sandbox on-demand for {repo_url}...")
+            sb = modal.Sandbox.create(
+                image=sandbox_image,
+                app=app,
+                timeout=SANDBOX_TIMEOUT,
+            )
+            sandbox_id = sb.object_id
+            from_pool = False
+            print(f"Created on-demand sandbox {sandbox_id}")
+
+        # 2) Trigger async pool replenishment (fire-and-forget)
+        try:
+            replenish_pool.spawn()
+        except Exception:
+            pass  # non-critical
+
+        # 3) Clone repo
+        p = sb.exec("bash", "-c", f"git clone --depth 1 {repo_url} /root/repo 2>&1")
+        clone_output = p.stdout.read()
+        try:
+            p.wait()
+        except Exception:
+            pass
+        clone_exit = p.returncode
+
+        if clone_exit != 0:
+            try:
+                sb.terminate()
+            except Exception:
+                pass
+            return {
+                "error": f"Failed to clone: {clone_output}",
+                "sandbox_id": None,
+            }
+
+        # 4) Write env vars if provided
+        if env_vars and isinstance(env_vars, dict) and len(env_vars) > 0:
+            env_content = "\n".join(f'{k}="{v}"' for k, v in env_vars.items()) + "\n"
+            p = sb.exec("bash", "-c", f"cat > /root/repo/.env << 'ENVEOF'\n{env_content}ENVEOF")
+            try:
+                p.wait()
+            except Exception:
+                pass
+            p = sb.exec("bash", "-c",
+                f"find /root/repo -name '.env.sample' -o -name '.env.example' -o -name '.env.template' | "
+                f"while read f; do dir=$(dirname \"$f\"); if [ ! -f \"$dir/.env\" ]; then "
+                f"cat > \"$dir/.env\" << 'ENVEOF'\n{env_content}ENVEOF\nfi; done"
+            )
+            try:
+                p.wait()
+            except Exception:
+                pass
+
+        # 5) Get repo structure for context
+        p = sb.exec("bash", "-c", "ls -la /root/repo 2>&1 | head -30")
+        ls_output = p.stdout.read()
+        try:
+            p.wait()
+        except Exception:
+            pass
+
+        source = "pool" if from_pool else "on-demand"
+        print(f"Sandbox {sandbox_id} ready ({source}) with repo cloned")
+
         return {
-            "exit_code": result.returncode,
+            "sandbox_id": sandbox_id,
+            "repo_url": repo_url,
+            "clone_output": clone_output.strip(),
+            "ls_output": ls_output.strip(),
+            "from_pool": from_pool,
+        }
+    except Exception as e:
+        print(f"create_sandbox error: {e}")
+        return {"error": f"Sandbox creation failed: {str(e)}"}
+
+
+# ─── Execute command in sandbox ──────────────────────────────────────────────
+
+@app.function(timeout=180, image=function_image)
+@modal.fastapi_endpoint(method="POST")
+def exec_command(request: dict):
+    """
+    Execute a command in an existing sandbox.
+
+    POST: { "sandbox_id": "sb-...", "command": "ls -la" }
+    Returns: { "stdout": "...", "stderr": "...", "exit_code": 0 }
+    """
+    sandbox_id = request.get("sandbox_id", "")
+    command = request.get("command", "")
+
+    if not sandbox_id or not command:
+        return {"error": "sandbox_id and command are required"}
+
+    try:
+        sb = modal.Sandbox.from_id(sandbox_id)
+    except Exception as e:
+        return {"error": f"Sandbox not found or terminated: {e}"}
+
+    # Always run from the repo directory
+    full_cmd = f"cd /root/repo && {command}"
+
+    try:
+        p = sb.exec("bash", "-c", full_cmd, timeout=120)
+        stdout = p.stdout.read()
+        stderr = p.stderr.read()
+        try:
+            p.wait()
+        except Exception:
+            pass
+        exit_code = p.returncode
+
+        # Truncate very long outputs
+        if len(stdout) > 10000:
+            stdout = stdout[:3000] + "\n\n... [truncated middle] ...\n\n" + stdout[-5000:]
+        if len(stderr) > 5000:
+            stderr = stderr[:1500] + "\n\n... [truncated] ...\n\n" + stderr[-2500:]
+
+        return {
             "stdout": stdout,
             "stderr": stderr,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "exit_code": -1,
-            "stdout": "",
-            "stderr": f"Command timed out after {COMMAND_TIMEOUT}s",
+            "exit_code": exit_code,
         }
     except Exception as e:
         return {
-            "exit_code": -1,
             "stdout": "",
-            "stderr": f"Failed to execute command: {e}",
+            "stderr": str(e),
+            "exit_code": -1,
         }
 
 
-def run_agent_loop(repo_url: str, repo_dir: str, task: str | None = None) -> dict:
+# ─── Terminate sandbox ──────────────────────────────────────────────────────
+
+@app.function(timeout=30, image=function_image)
+@modal.fastapi_endpoint(method="POST")
+def terminate_sandbox(request: dict):
     """
-    Run the Claude coding agent loop.
-    Returns a dict with status, summary, steps, and output.
+    Terminate a sandbox.
+
+    POST: { "sandbox_id": "sb-..." }
+    Returns: { "terminated": true }
     """
-    import anthropic
+    sandbox_id = request.get("sandbox_id", "")
+    if not sandbox_id:
+        return {"error": "sandbox_id is required"}
 
-    client = anthropic.Anthropic()  # uses ANTHROPIC_API_KEY env var
-
-    steps: list[dict] = []
-    user_task = task or (
-        f"Get this repository running: {repo_url}\n"
-        "Start by reading the README and understanding what the project does, "
-        "then install dependencies and run it."
-    )
-
-    messages = [{"role": "user", "content": user_task}]
-
-    for step_num in range(MAX_AGENT_STEPS):
-        try:
-            response = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=4096,
-                system=AGENT_SYSTEM_PROMPT,
-                tools=AGENT_TOOLS,
-                messages=messages,
-            )
-        except Exception as e:
-            return {
-                "status": "error",
-                "summary": f"Claude API error: {e}",
-                "steps": steps,
-                "output": "",
-            }
-
-        # Collect assistant response
-        messages.append({"role": "assistant", "content": response.content})
-
-        # If the agent is done talking (no tool calls), extract final summary
-        if response.stop_reason == "end_turn":
-            final_text = "\n".join(
-                block.text for block in response.content if hasattr(block, "text")
-            )
-            return {
-                "status": "success",
-                "summary": final_text,
-                "steps": steps,
-                "step_count": step_num + 1,
-                "output": steps[-1]["output"] if steps else "",
-            }
-
-        # Process tool calls
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    cmd = block.input.get("command", "")
-                    print(f"  [{step_num + 1}/{MAX_AGENT_STEPS}] $ {cmd}")
-
-                    result = _run_command(cmd, repo_dir)
-                    output_str = (
-                        f"exit_code: {result['exit_code']}\n"
-                        f"stdout:\n{result['stdout']}\n"
-                        f"stderr:\n{result['stderr']}"
-                    )
-
-                    steps.append({
-                        "step": step_num + 1,
-                        "command": cmd,
-                        "exit_code": result["exit_code"],
-                        "output": output_str[:3000],  # keep steps compact for response
-                    })
-
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": output_str,
-                    })
-
-            messages.append({"role": "user", "content": tool_results})
-
-    # Exhausted all steps
-    return {
-        "status": "max_steps_reached",
-        "summary": (
-            f"Agent used all {MAX_AGENT_STEPS} steps without finishing. "
-            "The repo may partially work — check the steps for details."
-        ),
-        "steps": steps,
-        "step_count": MAX_AGENT_STEPS,
-        "output": steps[-1]["output"] if steps else "",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Modal function — exposed as HTTPS endpoint
-# ---------------------------------------------------------------------------
-
-@app.function(
-    image=base_image,
-    timeout=600,           # 10 min max
-    memory=4096,           # 4 GB RAM
-    secrets=[modal.Secret.from_name("anthropic-key")],
-)
-@modal.web_endpoint(method="POST")
-def deploy_demo(request: dict):
-    """
-    HTTPS endpoint that clones a repo and runs the Claude deployment agent.
-
-    POST body:
-        {
-            "repo_url": "https://github.com/user/repo",
-            "task": "optional specific instructions"
-        }
-
-    Returns:
-        {
-            "status": "success" | "error" | "max_steps_reached",
-            "summary": "human-readable summary from Claude",
-            "steps": [ { "step": 1, "command": "...", "exit_code": 0, "output": "..." }, ... ],
-            "step_count": 12,
-            "repo_url": "https://github.com/user/repo"
-        }
-    """
-    repo_url = request.get("repo_url", "").strip()
-    task = request.get("task", "")
-
-    if not repo_url:
-        return {"status": "error", "summary": "repo_url is required", "steps": []}
-
-    # Validate URL (basic security check)
-    if not repo_url.startswith("https://github.com/"):
-        return {
-            "status": "error",
-            "summary": "Only public GitHub HTTPS URLs are supported.",
-            "steps": [],
-        }
-
-    repo_dir = "/tmp/repo"
-
-    # Clone the repository
-    print(f"Cloning {repo_url} ...")
-    clone_result = _run_command(f"git clone --depth 1 {repo_url} {repo_dir}", "/tmp")
-
-    if clone_result["exit_code"] != 0:
-        return {
-            "status": "error",
-            "summary": f"Failed to clone repository: {clone_result['stderr']}",
-            "steps": [{"step": 0, "command": f"git clone {repo_url}", "exit_code": clone_result["exit_code"], "output": clone_result["stderr"]}],
-        }
-
-    print(f"Cloned successfully.  Running agent loop ...")
-    start = time.time()
-    result = run_agent_loop(repo_url, repo_dir, task or None)
-    elapsed = time.time() - start
-
-    result["repo_url"] = repo_url
-    result["elapsed_seconds"] = round(elapsed, 1)
-    print(f"Agent finished in {elapsed:.1f}s — status: {result['status']}")
-    return result
+    try:
+        sb = modal.Sandbox.from_id(sandbox_id)
+        sb.terminate()
+        print(f"Terminated sandbox {sandbox_id}")
+        return {"terminated": True}
+    except Exception as e:
+        return {"error": f"Failed to terminate: {e}"}

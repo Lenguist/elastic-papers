@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
+import SandboxPanel from "./components/SandboxPanel";
 
 type ChatPaper = {
   arxiv_id: string;
@@ -80,6 +81,7 @@ function HomePageInner() {
   // Modal deploy state: maps repo URL → status
   const [deployStatus, setDeployStatus] = useState<Record<string, {
     loading: boolean;
+    statusMessage?: string;
     result?: {
       status: string;
       summary: string;
@@ -90,6 +92,10 @@ function HomePageInner() {
     error?: string;
   }>>({});
   const [expandedDeploy, setExpandedDeploy] = useState<string | null>(null);
+  const [envVarsInput, setEnvVarsInput] = useState<Record<string, string>>({}); // repo URL → env vars text
+  const [showEnvForm, setShowEnvForm] = useState<string | null>(null); // repo URL to show form for
+  const [sandboxRepo, setSandboxRepo] = useState<{ url: string; name: string } | null>(null); // active sandbox session
+  const [sandboxMinimized, setSandboxMinimized] = useState(false); // minimize instead of close
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -325,20 +331,114 @@ function HomePageInner() {
 
   async function handleDeployDemo(repoUrl: string) {
     if (deployStatus[repoUrl]?.loading) return;
-    setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: true } }));
+    setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: true, statusMessage: "Starting..." } }));
     setExpandedDeploy(repoUrl);
+    setShowEnvForm(null);
+
+    // Parse env vars from the textarea (KEY=VALUE per line)
+    const envText = envVarsInput[repoUrl] || "";
+    const envVars: Record<string, string> = {};
+    for (const line of envText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+        envVars[key] = val;
+      }
+    }
+
     try {
-      const res = await fetch("/api/deploy-demo", {
+      const reqBody: Record<string, unknown> = { repo_url: repoUrl, project_id: projectId };
+      if (Object.keys(envVars).length > 0) reqBody.env_vars = envVars;
+
+      const res = await fetch("/api/deploy-demo?stream=1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo_url: repoUrl, project_id: projectId }),
+        body: JSON.stringify(reqBody),
       });
-      const data = await res.json();
+
       if (!res.ok) {
+        const data = await res.json();
         setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: false, error: data.error || "Deploy failed" } }));
-      } else {
-        setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: false, result: data } }));
+        return;
       }
+
+      // Read SSE stream for live progress
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events (separated by double newlines)
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop()!; // keep incomplete last chunk
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+          const lines = part.split("\n");
+          let eventType = "";
+          let data = "";
+          for (const line of lines) {
+            if (line.startsWith("event: ")) eventType = line.slice(7);
+            if (line.startsWith("data: ")) data = line.slice(6);
+          }
+
+          if (eventType === "status" && data) {
+            try {
+              const parsed = JSON.parse(data);
+              setDeployStatus(prev => ({
+                ...prev,
+                [repoUrl]: { ...prev[repoUrl], loading: true, statusMessage: parsed.message },
+              }));
+            } catch { /* ignore */ }
+          } else if (eventType === "step" && data) {
+            try {
+              const step = JSON.parse(data);
+              setDeployStatus(prev => {
+                const existing = prev[repoUrl];
+                const existingSteps = existing?.result?.steps || [];
+                return {
+                  ...prev,
+                  [repoUrl]: {
+                    ...existing,
+                    loading: true,
+                    statusMessage: `Step ${step.step}: $ ${step.command.slice(0, 60)}`,
+                    result: {
+                      ...existing?.result,
+                      status: "running",
+                      summary: "",
+                      steps: [...existingSteps, step],
+                    },
+                  },
+                };
+              });
+            } catch { /* ignore */ }
+          } else if (eventType === "complete" && data) {
+            try {
+              const result = JSON.parse(data);
+              setDeployStatus(prev => ({
+                ...prev,
+                [repoUrl]: { loading: false, result },
+              }));
+            } catch { /* ignore */ }
+          }
+        }
+      }
+
+      // If stream ended without a complete event, mark as done
+      setDeployStatus(prev => {
+        if (prev[repoUrl]?.loading) {
+          return { ...prev, [repoUrl]: { ...prev[repoUrl], loading: false } };
+        }
+        return prev;
+      });
     } catch (err) {
       setDeployStatus(prev => ({ ...prev, [repoUrl]: { loading: false, error: (err as Error).message } }));
     }
@@ -491,22 +591,29 @@ function HomePageInner() {
             }
           `}</style>
           <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
-            <span style={{ position: 'absolute', top: '-120px', left: '3%', fontSize: '20px', opacity: 0, animation: 'fall 7s linear infinite', animationDelay: '0s', animationFillMode: 'backwards' }}>📄</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '8%', fontSize: '22px', opacity: 0, animation: 'fall 6s linear infinite', animationDelay: '1.5s', animationFillMode: 'backwards' }}>💻</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '14%', fontSize: '18px', opacity: 0, animation: 'fall 8s linear infinite', animationDelay: '4s', animationFillMode: 'backwards' }}>🔬</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '18%', fontSize: '16px', opacity: 0, animation: 'fall 7.5s linear infinite', animationDelay: '2s', animationFillMode: 'backwards' }}>📊</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '82%', fontSize: '20px', opacity: 0, animation: 'fall 6.5s linear infinite', animationDelay: '0.5s', animationFillMode: 'backwards' }}>📚</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '86%', fontSize: '24px', opacity: 0, animation: 'fall 5.5s linear infinite', animationDelay: '3s', animationFillMode: 'backwards' }}>🧠</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '90%', fontSize: '18px', opacity: 0, animation: 'fall 7s linear infinite', animationDelay: '1s', animationFillMode: 'backwards' }}>✏️</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '94%', fontSize: '22px', opacity: 0, animation: 'fall 6s linear infinite', animationDelay: '3.5s', animationFillMode: 'backwards' }}>🔍</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '6%', fontSize: '16px', opacity: 0, animation: 'fall 8s linear infinite', animationDelay: '2.5s', animationFillMode: 'backwards' }}>📝</span>
-            <span style={{ position: 'absolute', top: '-120px', left: '92%', fontSize: '20px', opacity: 0, animation: 'fall 6.5s linear infinite', animationDelay: '0.8s', animationFillMode: 'backwards' }}>🎓</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '3%', fontSize: '20px', opacity: 0, animation: 'fall 12s linear infinite', animationDelay: '0s', animationFillMode: 'backwards' }}>🤖</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '8%', fontSize: '22px', opacity: 0, animation: 'fall 14s linear infinite', animationDelay: '1.5s', animationFillMode: 'backwards' }}>🚀</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '14%', fontSize: '18px', opacity: 0, animation: 'fall 11s linear infinite', animationDelay: '4s', animationFillMode: 'backwards' }}>🧫</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '18%', fontSize: '16px', opacity: 0, animation: 'fall 13s linear infinite', animationDelay: '2s', animationFillMode: 'backwards' }}>🧪</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '82%', fontSize: '20px', opacity: 0, animation: 'fall 15s linear infinite', animationDelay: '0.5s', animationFillMode: 'backwards' }}>🧬</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '86%', fontSize: '24px', opacity: 0, animation: 'fall 10s linear infinite', animationDelay: '3s', animationFillMode: 'backwards' }}>🔬</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '90%', fontSize: '18px', opacity: 0, animation: 'fall 12s linear infinite', animationDelay: '1s', animationFillMode: 'backwards' }}>🔭</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '94%', fontSize: '22px', opacity: 0, animation: 'fall 14s linear infinite', animationDelay: '3.5s', animationFillMode: 'backwards' }}>📡</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '6%', fontSize: '16px', opacity: 0, animation: 'fall 11s linear infinite', animationDelay: '2.5s', animationFillMode: 'backwards' }}>🗺</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '92%', fontSize: '20px', opacity: 0, animation: 'fall 13s linear infinite', animationDelay: '0.8s', animationFillMode: 'backwards' }}>🌁</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '10%', fontSize: '18px', opacity: 0, animation: 'fall 15s linear infinite', animationDelay: '5s', animationFillMode: 'backwards' }}>🔋</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '88%', fontSize: '16px', opacity: 0, animation: 'fall 12s linear infinite', animationDelay: '6s', animationFillMode: 'backwards' }}>💡</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '5%', fontSize: '20px', opacity: 0, animation: 'fall 14s linear infinite', animationDelay: '7s', animationFillMode: 'backwards' }}>🎞</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '95%', fontSize: '18px', opacity: 0, animation: 'fall 11s linear infinite', animationDelay: '4.5s', animationFillMode: 'backwards' }}>🦠</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '16%', fontSize: '22px', opacity: 0, animation: 'fall 13s linear infinite', animationDelay: '8s', animationFillMode: 'backwards' }}>📜</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '84%', fontSize: '16px', opacity: 0, animation: 'fall 10s linear infinite', animationDelay: '5.5s', animationFillMode: 'backwards' }}>📊</span>
+            <span style={{ position: 'absolute', top: '-120px', left: '12%', fontSize: '20px', opacity: 0, animation: 'fall 15s linear infinite', animationDelay: '9s', animationFillMode: 'backwards' }}>💻</span>
           </div>
           <div className="w-full max-w-3xl px-8">
             {/* Logo & Title */}
             <div className="mb-4 text-center">
               <h1 className="flex items-start justify-center gap-3" style={{ fontFamily: 'Lato', fontStyle: 'italic', fontWeight: 900, fontSize: '45px', lineHeight: '54px', textAlign: 'center', color: '#AF247B' }}>
-                <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)' }}>
+                <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)', fontWeight: 300 }}>
                   research
                 </span>
                 <img 
@@ -514,7 +621,7 @@ function HomePageInner() {
                   alt="logo" 
                   style={{ height: '90px', width: 'auto', objectFit: 'contain', imageRendering: 'crisp-edges' }}
                 />
-                <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)' }}>
+                <span style={{ position: 'relative', display: 'inline-block', background: 'linear-gradient(to top, #FFD84E 0%, #FFD84E 25%, transparent 25%, transparent 100%)', fontWeight: 300 }}>
                   atelier
                 </span>
               </h1>
@@ -1323,36 +1430,26 @@ function HomePageInner() {
                                     </svg>
                                   </a>
                                   <button
-                                    onClick={() => handleDeployDemo(link.url)}
-                                    disabled={ds?.loading}
-                                    className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-green-300 bg-green-50 px-3 py-2.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-wait disabled:opacity-60"
+                                    onClick={() => {
+                                      if (sandboxRepo) {
+                                        // Already have an active session — just bring it back
+                                        setSandboxMinimized(false);
+                                      } else {
+                                        setSandboxRepo({ url: link.url, name: link.repoName });
+                                        setSandboxMinimized(false);
+                                      }
+                                    }}
+                                    className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-green-300 bg-green-50 px-3 py-2.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100"
                                     title="Run this code in a cloud sandbox using Modal + Claude"
                                   >
-                                    {ds?.loading ? (
-                                      <>
-                                        <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                                        </svg>
-                                        Running...
-                                      </>
-                                    ) : ds?.result ? (
-                                      <>
-                                        {ds.result.status === "success" ? "Done" : "Retry"}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                        Run on Modal
-                                      </>
-                                    )}
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                    </svg>
+                                    Run on Modal
                                   </button>
                                 </div>
 
-                                {/* Deploy loading indicator */}
+                                {/* Deploy loading indicator with live status */}
                                 {ds?.loading && (
                                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                                     <div className="flex items-center gap-2">
@@ -1362,9 +1459,26 @@ function HomePageInner() {
                                       </svg>
                                       <span className="font-medium">AI agent is working...</span>
                                     </div>
-                                    <p className="mt-1 text-amber-600">
-                                      Claude is reading the README, installing dependencies, and trying to run the code. This typically takes 1-5 minutes.
-                                    </p>
+                                    {ds.statusMessage && (
+                                      <p className="mt-1 font-mono text-amber-700">{ds.statusMessage}</p>
+                                    )}
+                                    {/* Show steps streaming in while loading */}
+                                    {ds.result?.steps && ds.result.steps.length > 0 && (
+                                      <div className="mt-2 space-y-1.5 border-t border-amber-300/50 pt-2">
+                                        <div className="max-h-48 overflow-y-auto space-y-1">
+                                          {ds.result.steps.map((step, i) => (
+                                            <div key={i} className="rounded bg-black/5 p-1.5 font-mono text-[10px]">
+                                              <div className="flex items-center gap-2">
+                                                <span className={step.exit_code === 0 ? "text-green-600" : "text-red-600"}>
+                                                  {step.exit_code === 0 ? "OK" : `exit ${step.exit_code}`}
+                                                </span>
+                                                <span className="font-medium">$ {step.command}</span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
@@ -1377,17 +1491,21 @@ function HomePageInner() {
                                 )}
 
                                 {/* Deploy result */}
-                                {ds?.result && (
+                                {ds?.result && !ds.loading && (
                                   <div className={`rounded-lg border p-3 text-xs ${
                                     ds.result.status === "success"
                                       ? "border-green-200 bg-green-50 text-green-800"
+                                      : ds.result.status === "needs_input"
+                                      ? "border-blue-200 bg-blue-50 text-blue-800"
                                       : ds.result.status === "max_steps_reached"
                                       ? "border-amber-200 bg-amber-50 text-amber-800"
+                                      : ds.result.status === "running" ? "border-amber-200 bg-amber-50 text-amber-800"
                                       : "border-red-200 bg-red-50 text-red-800"
                                   }`}>
                                     <div className="flex items-center justify-between">
                                       <p className="font-medium">
                                         {ds.result.status === "success" ? "Completed" :
+                                         ds.result.status === "needs_input" ? "Needs configuration" :
                                          ds.result.status === "max_steps_reached" ? "Partial (hit step limit)" : "Failed"}
                                         {ds.result.step_count && ` — ${ds.result.step_count} steps`}
                                         {ds.result.elapsed_seconds && ` in ${ds.result.elapsed_seconds}s`}
@@ -1399,7 +1517,21 @@ function HomePageInner() {
                                         {isExpanded ? "Collapse" : "Show details"}
                                       </button>
                                     </div>
-                                    <p className="mt-1 whitespace-pre-wrap">{ds.result.summary?.slice(0, 500)}</p>
+                                    <p className="mt-1 whitespace-pre-wrap">{ds.result.summary?.slice(0, 800)}</p>
+
+                                    {/* Needs input — show env var form */}
+                                    {ds.result.status === "needs_input" && (
+                                      <div className="mt-3 space-y-2 border-t border-blue-200 pt-3">
+                                        <p className="font-medium">Provide the required environment variables below, then click &quot;Run on Modal&quot; again:</p>
+                                        <textarea
+                                          className="w-full rounded border border-blue-300 bg-white p-2 font-mono text-[11px] text-zinc-800 placeholder:text-zinc-400"
+                                          rows={6}
+                                          placeholder={"# Paste KEY=VALUE pairs, one per line\nLLM_API_KEY=sk-...\nLLM_MODEL=gpt-4o\nEMBEDDING_API_KEY=..."}
+                                          value={envVarsInput[link.url] || ""}
+                                          onChange={(e) => setEnvVarsInput(prev => ({ ...prev, [link.url]: e.target.value }))}
+                                        />
+                                      </div>
+                                    )}
 
                                     {isExpanded && ds.result.steps && ds.result.steps.length > 0 && (
                                       <div className="mt-3 space-y-2 border-t border-current/10 pt-3">
@@ -1423,6 +1555,30 @@ function HomePageInner() {
                                         </div>
                                       </div>
                                     )}
+                                  </div>
+                                )}
+
+                                {/* Env vars toggle (always available, even before first run) */}
+                                {!ds?.loading && ds?.result?.status !== "needs_input" && (
+                                  <div className="flex items-center">
+                                    <button
+                                      onClick={() => setShowEnvForm(showEnvForm === link.url ? null : link.url)}
+                                      className="text-[10px] text-zinc-400 hover:text-zinc-600"
+                                    >
+                                      {showEnvForm === link.url ? "Hide env config" : "Configure env variables"}
+                                    </button>
+                                  </div>
+                                )}
+                                {showEnvForm === link.url && (
+                                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-2.5">
+                                    <p className="mb-1.5 text-[10px] font-medium text-zinc-500">Environment variables (KEY=VALUE per line):</p>
+                                    <textarea
+                                      className="w-full rounded border border-zinc-300 bg-white p-2 font-mono text-[11px] text-zinc-800 placeholder:text-zinc-400"
+                                      rows={4}
+                                      placeholder={"API_KEY=sk-...\nMODEL=gpt-4o"}
+                                      value={envVarsInput[link.url] || ""}
+                                      onChange={(e) => setEnvVarsInput(prev => ({ ...prev, [link.url]: e.target.value }))}
+                                    />
                                   </div>
                                 )}
                               </div>
@@ -1758,6 +1914,18 @@ function HomePageInner() {
           </div>
         </div>
       </div>
+
+      {/* Sandbox chat panel — stays mounted when minimized so state is preserved */}
+      {sandboxRepo && (
+        <SandboxPanel
+          repoUrl={sandboxRepo.url}
+          repoName={sandboxRepo.name}
+          minimized={sandboxMinimized}
+          onMinimize={() => setSandboxMinimized(true)}
+          onRestore={() => setSandboxMinimized(false)}
+          onClose={() => { setSandboxRepo(null); setSandboxMinimized(false); }}
+        />
+      )}
     </div>
   );
 }
