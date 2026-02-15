@@ -13,15 +13,24 @@ export type LibraryPaper = {
   publishedDate?: string;
   /** User approved (checkmark); new auto-added papers start false */
   approved?: boolean;
+  /** GitHub repository links found in the paper */
+  githubLinks?: string[];
 };
 
-let library: LibraryPaper[] = [];
+/** In-memory store keyed by projectId */
+const store = new Map<string, LibraryPaper[]>();
 
-export function getLibrary(): LibraryPaper[] {
-  return library;
+function getOrCreate(projectId: string): LibraryPaper[] {
+  if (!store.has(projectId)) store.set(projectId, []);
+  return store.get(projectId)!;
+}
+
+export function getLibrary(projectId: string): LibraryPaper[] {
+  return getOrCreate(projectId);
 }
 
 export function addPapers(
+  projectId: string,
   papers: Array<{
     id: string;
     title?: string;
@@ -29,6 +38,7 @@ export function addPapers(
     authors?: string[];
   }>
 ): { added: LibraryPaper[]; total: number } {
+  const library = getOrCreate(projectId);
   const now = new Date().toISOString();
   const normalized = papers
     .map((p): LibraryPaper | null => {
@@ -44,20 +54,21 @@ export function addPapers(
 
   const existingIds = new Set(library.map((p) => p.id));
   const toAdd = normalized.filter((p) => !existingIds.has(p.id));
-  library = [...library, ...toAdd];
-  return { added: toAdd, total: library.length };
+  store.set(projectId, [...library, ...toAdd]);
+  return { added: toAdd, total: store.get(projectId)!.length };
 }
 
-export function removePapers(paperIds: string[]): { removed: number; total: number } {
+export function removePapers(projectId: string, paperIds: string[]): { removed: number; total: number } {
+  const library = getOrCreate(projectId);
   const ids = new Set(paperIds.map((id) => String(id).trim()).filter(Boolean));
   const before = library.length;
-  library = library.filter((p) => !ids.has(p.id));
-  const removed = before - library.length;
-  return { removed, total: library.length };
+  const filtered = library.filter((p) => !ids.has(p.id));
+  store.set(projectId, filtered);
+  return { removed: before - filtered.length, total: filtered.length };
 }
 
-/** Update stored content for a paper (abstract, authors, pdfUrl, publishedYear, publishedDate, title). Used after arXiv fetch. */
 export function updatePaperContent(
+  projectId: string,
   paperId: string,
   content: {
     abstract?: string;
@@ -66,8 +77,10 @@ export function updatePaperContent(
     publishedYear?: string;
     publishedDate?: string;
     title?: string;
+    githubLinks?: string[];
   }
 ): void {
+  const library = getOrCreate(projectId);
   const id = String(paperId).trim();
   const i = library.findIndex((p) => p.id === id);
   if (i === -1) return;
@@ -79,18 +92,14 @@ export function updatePaperContent(
     ...(content.publishedYear !== undefined && { publishedYear: content.publishedYear }),
     ...(content.publishedDate !== undefined && { publishedDate: content.publishedDate }),
     ...(content.title !== undefined && content.title && { title: content.title }),
+    ...(content.githubLinks !== undefined && { githubLinks: content.githubLinks }),
   };
 }
 
-/** Set approved state for a paper (checkmark). */
-export function setPaperApproved(paperId: string, approved: boolean): void {
+export function setPaperApproved(projectId: string, paperId: string, approved: boolean): void {
+  const library = getOrCreate(projectId);
   const id = String(paperId).trim();
   const i = library.findIndex((p) => p.id === id);
   if (i === -1) return;
   library[i] = { ...library[i], approved };
-}
-
-/** Reset library to empty. For testing only. */
-export function resetLibrary(): void {
-  library = [];
 }

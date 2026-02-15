@@ -3,14 +3,14 @@ import * as memory from "@/lib/notes-store";
 
 export type Note = { id: string; content: string; paperId: string | null; createdAt: string; updatedAt: string };
 
-export async function getNotes(): Promise<Note[]> {
-  if (db.hasDb()) return db.dbGetNotes();
-  return Promise.resolve(memory.getNotes());
+export async function getNotes(projectId: string): Promise<Note[]> {
+  if (db.hasDb()) return db.dbGetNotes(projectId);
+  return Promise.resolve(memory.getNotes(projectId));
 }
 
-export async function createNote(content: string, paperId?: string | null): Promise<Note | null> {
-  if (db.hasDb()) return db.dbCreateNote(content, paperId);
-  const note = memory.addNote(content, paperId);
+export async function createNote(projectId: string, content: string, paperId?: string | null): Promise<Note | null> {
+  if (db.hasDb()) return db.dbCreateNote(projectId, content, paperId);
+  const note = memory.addNote(projectId, content, paperId);
   return Promise.resolve(note);
 }
 

@@ -1,24 +1,57 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 
+type ChatPaper = {
+  arxiv_id: string;
+  title: string;
+  abstract: string;
+  authors: string[];
+  categories: string[];
+  created: string;
+  score: number;
+  url: string;
+};
+
 type Message = {
   role: "user" | "assistant" | "error" | "system";
   text: string;
+  papers?: ChatPaper[];
+};
+
+type Project = {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
 };
 
 export default function HomePage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center"><span className="text-zinc-400">Loading...</span></div>}>
+      <HomePageInner />
+    </Suspense>
+  );
+}
+
+function HomePageInner() {
+  const searchParams = useSearchParams();
   const [scopeDefined, setScopeDefined] = useState(false);
   const [scopeInput, setScopeInput] = useState("");
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState("");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [creatingProject, setCreatingProject] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<"library" | "notes">("library");
+  const [activeTab, setActiveTab] = useState<"library" | "notes" | "code">("library");
+  const [codeLinks, setCodeLinks] = useState<Array<{ paperId: string; paperTitle: string; url: string; repoName: string }>>([]);
   const [libraryPapers, setLibraryPapers] = useState<Array<{
     id: string;
     title: string;
@@ -30,10 +63,12 @@ export default function HomePage() {
     publishedYear?: string;
     publishedDate?: string;
     approved?: boolean;
+    githubLinks?: string[];
   }>>([]);
   const [authorsExpanded, setAuthorsExpanded] = useState<Set<string>>(new Set());
   const [abstractExpanded, setAbstractExpanded] = useState<Set<string>>(new Set());
   const [savedToLibraryMessageIndices, setSavedToLibraryMessageIndices] = useState<Set<number>>(new Set());
+  const [chatPaperSelections, setChatPaperSelections] = useState<Record<number, Set<string>>>({});
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<Array<{ id: string; content: string; paperId: string | null; createdAt: string; updatedAt: string }>>([]);
   const [newNoteContent, setNewNoteContent] = useState("");
@@ -44,6 +79,35 @@ export default function HomePage() {
   const [editingNoteContent, setEditingNoteContent] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  // ─── Auto-load project from URL ?project=ID&name=NAME ────────────────────
+  useEffect(() => {
+    const pid = searchParams.get("project");
+    const pname = searchParams.get("name");
+    if (pid && !projectId) {
+      setProjectId(pid);
+      setProjectName(pname || "Project");
+      setScopeDefined(true);
+      setMessages([
+        {
+          role: "system",
+          text: `Resumed project "${pname || "Project"}".\n\nYour library and notes are preserved. Ask questions, search for papers, or continue your research.`,
+        },
+      ]);
+    }
+  }, [searchParams, projectId]);
+
+  // ─── Helper: auto-inject project_id into all API calls ──────────────────
+  // This is the "one place" fix for threading project_id everywhere.
+  // Instead of changing 15+ individual fetch calls, everything goes through this.
+  const apiFetch = useCallback(
+    (url: string, options?: RequestInit): Promise<Response> => {
+      if (!projectId) return fetch(url, options);
+      const sep = url.includes("?") ? "&" : "?";
+      return fetch(`${url}${sep}project_id=${projectId}`, options);
+    },
+    [projectId]
+  );
 
   // Extract papers from a message (arXiv links + optional markdown titles)
   function extractPapersFromText(text: string): Array<{ id: string; title: string; url: string }> {
@@ -112,7 +176,7 @@ export default function HomePage() {
     if (newPapers.length === 0) return;
     (async () => {
       try {
-        await fetch("/api/library", {
+        await apiFetch("/api/library", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ papers: newPapers }),
@@ -129,13 +193,65 @@ export default function HomePage() {
     })();
   }
 
+  function toggleChatPaperSelection(msgIndex: number, arxivId: string) {
+    setChatPaperSelections((prev) => {
+      const current = new Set(prev[msgIndex] ?? []);
+      if (current.has(arxivId)) {
+        current.delete(arxivId);
+      } else {
+        current.add(arxivId);
+      }
+      return { ...prev, [msgIndex]: current };
+    });
+  }
+
+  function selectAllChatPapers(msgIndex: number, papers: ChatPaper[]) {
+    setChatPaperSelections((prev) => ({
+      ...prev,
+      [msgIndex]: new Set(papers.map((p) => p.arxiv_id)),
+    }));
+  }
+
+  function deselectAllChatPapers(msgIndex: number) {
+    setChatPaperSelections((prev) => ({
+      ...prev,
+      [msgIndex]: new Set<string>(),
+    }));
+  }
+
+  async function saveSelectedChatPapers(msgIndex: number, papers: ChatPaper[]) {
+    const selected = chatPaperSelections[msgIndex];
+    if (!selected || selected.size === 0) return;
+    const toSave = papers
+      .filter((p) => selected.has(p.arxiv_id))
+      .map((p) => ({
+        id: p.arxiv_id,
+        title: p.title,
+        url: p.url,
+        authors: p.authors,
+        abstract: p.abstract,
+      }));
+    if (toSave.length === 0) return;
+    try {
+      await apiFetch("/api/library", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ papers: toSave }),
+      });
+      setSavedToLibraryMessageIndices((s) => new Set(s).add(msgIndex));
+      await fetchLibrary();
+    } catch {
+      // silent fail
+    }
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   async function fetchLibrary() {
     try {
-      const res = await fetch("/api/library");
+      const res = await apiFetch("/api/library");
       const data = await res.json();
       if (Array.isArray(data.papers)) setLibraryPapers(data.papers);
     } catch {
@@ -154,7 +270,7 @@ export default function HomePage() {
 
   async function fetchNotes() {
     try {
-      const res = await fetch("/api/notes");
+      const res = await apiFetch("/api/notes");
       const data = await res.json();
       if (Array.isArray(data.notes)) setNotes(data.notes);
     } catch {
@@ -162,22 +278,77 @@ export default function HomePage() {
     }
   }
 
+  // Extract GitHub links from library papers' stored links and abstracts
+  function extractCodeLinksFromLibrary() {
+    const ghRegex = /https?:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+/g;
+    const links: Array<{ paperId: string; paperTitle: string; url: string; repoName: string }> = [];
+    const seen = new Set<string>();
+
+    function addLink(paper: typeof libraryPapers[0], url: string) {
+      const clean = url.replace(/[.,;)}\]]+$/, "");
+      if (seen.has(clean)) return;
+      seen.add(clean);
+      try {
+        const parts = new URL(clean).pathname.split("/").filter(Boolean);
+        const repoName = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : clean;
+        links.push({ paperId: paper.id, paperTitle: paper.title, url: clean, repoName });
+      } catch {
+        // invalid URL, skip
+      }
+    }
+
+    for (const paper of libraryPapers) {
+      // First: stored GitHub links from full-text extraction
+      if (paper.githubLinks) {
+        for (const link of paper.githubLinks) addLink(paper, link);
+      }
+      // Second: scan the abstract for any additional GitHub links
+      const text = [paper.abstract ?? "", paper.url ?? ""].join(" ");
+      const matches = text.match(ghRegex) || [];
+      for (const m of matches) addLink(paper, m);
+    }
+    setCodeLinks(links);
+  }
+
   useEffect(() => {
     if (scopeDefined && (activeTab === "notes" || activeTab === "library")) fetchNotes();
   }, [scopeDefined, activeTab]);
 
-  function handleScopeSubmit(e: React.FormEvent) {
+  useEffect(() => {
+    if (scopeDefined && activeTab === "code") extractCodeLinksFromLibrary();
+  }, [scopeDefined, activeTab, libraryPapers]);
+
+  async function handleScopeSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const scope = scopeInput.trim();
-    if (!scope) return;
-    
+    const description = scopeInput.trim();
+    if (!description || creatingProject) return;
+
+    setCreatingProject(true);
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+      const data = await res.json();
+      if (data.project) {
+        setProjectId(data.project.id);
+        setProjectName(data.project.name);
     setScopeDefined(true);
     setMessages([
       {
         role: "system",
-        text: `Research scope: ${scope}\n\nYou can now ask questions about trends, compare approaches, find related papers, or explore this research area.`,
+            text: `Project "${data.project.name}" created.\n\nYou can now ask questions about trends, compare approaches, find related papers, or explore this research area.`,
       },
     ]);
+      } else {
+        setMessages([{ role: "error", text: data.error || "Failed to create project" }]);
+      }
+    } catch (err) {
+      setMessages([{ role: "error", text: "Failed to create project: " + (err instanceof Error ? err.message : String(err)) }]);
+    } finally {
+      setCreatingProject(false);
+    }
   }
 
   async function handleChatSubmit(e: React.FormEvent) {
@@ -197,13 +368,19 @@ export default function HomePage() {
       setTimeout(() => setLoadingStage("Generating response..."), 4000);
 
       const selectedIds = selectedLibraryIds.size > 0 ? [...selectedLibraryIds] : undefined;
+      // Send conversation history so the agent has multi-turn context
+      const history = messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, text: m.text }));
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           message: text,
           scope: scopeInput,
+          project_id: projectId,
           selected_paper_ids: selectedIds,
+          history,
         }),
       });
       const data = await res.json();
@@ -220,11 +397,10 @@ export default function HomePage() {
           : typeof data.response === 'object' 
             ? JSON.stringify(data.response, null, 2)
             : String(data.response || "");
-        // Do not show arXiv IDs in the chat; auto-add returned papers to library
         const responseText = stripArxivIdsFromResponse(rawResponse);
-        setMessages((m) => [...m, { role: "assistant", text: responseText }]);
-        saveMessageToLibrary(rawResponse);
-        fetchLibrary();
+        // Attach structured papers from the API for interactive selection
+        const returnedPapers: ChatPaper[] = Array.isArray(data.papers) ? data.papers : [];
+        setMessages((m) => [...m, { role: "assistant", text: responseText, papers: returnedPapers }]);
       }
     } catch (err) {
       setMessages((m) => [
@@ -299,16 +475,21 @@ export default function HomePage() {
                     type="text"
                     value={scopeInput}
                     onChange={(e) => setScopeInput(e.target.value)}
-                    placeholder="Define your research scope"
+                    placeholder="Describe your new project..."
                     className="flex-1 text-lg text-zinc-700 placeholder-zinc-400 focus:outline-none"
                   />
                   <button
                     type="submit"
-                    className="text-zinc-400 hover:text-zinc-600"
+                    disabled={creatingProject}
+                    className="text-zinc-400 hover:text-zinc-600 disabled:opacity-50"
                   >
+                    {creatingProject ? (
+                      <span className="text-sm text-zinc-500">Creating...</span>
+                    ) : (
                     <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
+                    )}
                   </button>
                 </div>
                 
@@ -480,7 +661,7 @@ export default function HomePage() {
                 lineHeight: '22px',
                 textAlign: 'center',
                 color: '#231F1F',
-              }}>{scopeInput}</span>
+              }}>{projectName || scopeInput}</span>
             </div>
             
             <Link
@@ -490,19 +671,13 @@ export default function HomePage() {
             >
               Discovery
             </Link>
-            <button
-              onClick={() => {
-                setScopeDefined(false);
-                setMessages([]);
-                setScopeInput("");
-              }}
+            <Link
+              href="/projects"
               className="rounded-lg bg-white px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
-              style={{
-                border: '1px solid #E5E5E5',
-              }}
+              style={{ border: '1px solid #E5E5E5' }}
             >
-              Change Scope
-            </button>
+              Projects
+            </Link>
           </div>
         </div>
 
@@ -530,6 +705,16 @@ export default function HomePage() {
                 }}
               >
                 <span>Notes</span>
+                <span className="text-xs" style={{ color: '#AF247B' }}>x</span>
+              </button>
+              <button
+                onClick={() => setActiveTab("code")}
+                className="flex items-center gap-2 border border-b-0 border-l-0 border-pink-600 px-4 py-1.5 text-sm"
+                style={{
+                  background: activeTab === "code" ? "rgba(196, 210, 237, 0.3)" : "transparent",
+                }}
+              >
+                <span>Code</span>
                 <span className="text-xs" style={{ color: '#AF247B' }}>x</span>
               </button>
             </div>
@@ -654,7 +839,7 @@ export default function HomePage() {
                                 type="button"
                                 onClick={async () => {
                                   try {
-                                    await fetch("/api/library/approve", {
+                                    await apiFetch("/api/library/approve", {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
                                       body: JSON.stringify({ paper_id: paper.id, approved: true }),
@@ -675,7 +860,7 @@ export default function HomePage() {
                                 type="button"
                                 onClick={async () => {
                                   try {
-                                    await fetch("/api/library/remove", {
+                                    await apiFetch("/api/library/remove", {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
                                       body: JSON.stringify({ paper_ids: [paper.id] }),
@@ -818,7 +1003,7 @@ export default function HomePage() {
                                           const content = (paperNoteDrafts[paper.id] ?? "").trim();
                                           if (!content) return;
                                           try {
-                                            await fetch("/api/notes", {
+                                            await apiFetch("/api/notes", {
                                               method: "POST",
                                               headers: { "Content-Type": "application/json" },
                                               body: JSON.stringify({ content, paper_id: paper.id }),
@@ -857,7 +1042,7 @@ export default function HomePage() {
                       const content = newNoteContent.trim();
                       if (!content) return;
                       try {
-                        await fetch("/api/notes", {
+                        await apiFetch("/api/notes", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ content }),
@@ -1017,6 +1202,64 @@ export default function HomePage() {
                   })()}
                 </div>
               )}
+
+              {activeTab === "code" && (
+                <div className="flex flex-col gap-4 font-sans">
+                  {codeLinks.length === 0 ? (
+                    <div className="space-y-3">
+                      <p className="text-sm text-zinc-500">
+                        No GitHub repositories found in your library papers yet.
+                      </p>
+                      <p className="text-xs text-zinc-400">
+                        Code links are extracted from paper full-text and abstracts. Add papers to your library and their GitHub repos will appear here automatically once indexing completes.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-zinc-500">
+                        {codeLinks.length} repositor{codeLinks.length === 1 ? "y" : "ies"} found in library papers
+                      </p>
+                      {/* Group by paper */}
+                      {(() => {
+                        const byPaper = new Map<string, { title: string; links: typeof codeLinks }>();
+                        for (const link of codeLinks) {
+                          if (!byPaper.has(link.paperId)) {
+                            byPaper.set(link.paperId, { title: link.paperTitle, links: [] });
+                          }
+                          byPaper.get(link.paperId)!.links.push(link);
+                        }
+                        return [...byPaper.entries()].map(([paperId, { title, links }]) => (
+                          <section key={paperId} className="space-y-2">
+                            <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 line-clamp-1">
+                              {title}
+                            </h3>
+                            {links.map((link) => (
+                              <a
+                                key={link.url}
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-3 rounded-lg border border-zinc-200 bg-white p-3 transition-colors hover:border-pink-200 hover:bg-pink-50/50"
+                              >
+                                <svg className="h-5 w-5 flex-shrink-0 text-zinc-700" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                                </svg>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-zinc-800">{link.repoName}</p>
+                                  <p className="truncate text-xs text-zinc-400">{link.url}</p>
+                                </div>
+                                <svg className="h-4 w-4 flex-shrink-0 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </a>
+                            ))}
+                          </section>
+                        ));
+                      })()}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1113,7 +1356,128 @@ export default function HomePage() {
                         {msg.text}
                       </ReactMarkdown>
                     </div>
-                    {extractPapersFromText(msg.text).length > 0 && (
+                    {/* Paper cards for selection */}
+                    {msg.papers && msg.papers.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                            {msg.papers.length} papers found
+                          </span>
+                          {!savedToLibraryMessageIndices.has(i) && (
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => selectAllChatPapers(i, msg.papers!)}
+                                className="text-xs text-pink-600 hover:text-pink-800 dark:text-pink-400 dark:hover:text-pink-300"
+                              >
+                                Select all
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deselectAllChatPapers(i)}
+                                className="text-xs text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {msg.papers.map((paper) => {
+                          const isSelected = chatPaperSelections[i]?.has(paper.arxiv_id) ?? false;
+                          const alreadyInLibrary = libraryPapers.some((lp) => lp.id === paper.arxiv_id);
+                          const isSaved = savedToLibraryMessageIndices.has(i) && isSelected;
+                          return (
+                            <div
+                              key={paper.arxiv_id}
+                              onClick={() => {
+                                if (!savedToLibraryMessageIndices.has(i) && !alreadyInLibrary) {
+                                  toggleChatPaperSelection(i, paper.arxiv_id);
+                                }
+                              }}
+                              className={`cursor-pointer rounded-lg border p-3 transition-all ${
+                                alreadyInLibrary
+                                  ? "border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/20"
+                                  : isSaved
+                                  ? "border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/20"
+                                  : isSelected
+                                  ? "border-pink-300 bg-pink-50 dark:border-pink-700 dark:bg-pink-950/30"
+                                  : "border-zinc-200 bg-zinc-50 hover:border-pink-200 hover:bg-pink-50/50 dark:border-zinc-700 dark:bg-zinc-800/40 dark:hover:border-pink-800 dark:hover:bg-pink-950/20"
+                              }`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5 flex-shrink-0">
+                                  {alreadyInLibrary ? (
+                                    <span className="text-green-500 dark:text-green-400" title="Already in library">✓</span>
+                                  ) : isSaved ? (
+                                    <span className="text-green-500 dark:text-green-400">✓</span>
+                                  ) : (
+                                    <div
+                                      className={`h-4 w-4 rounded border-2 transition-colors ${
+                                        isSelected
+                                          ? "border-pink-500 bg-pink-500"
+                                          : "border-zinc-300 dark:border-zinc-600"
+                                      }`}
+                                    >
+                                      {isSelected && (
+                                        <svg className="h-3 w-3 text-white" viewBox="0 0 12 12" fill="none">
+                                          <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <a
+                                    href={paper.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-sm font-medium text-zinc-900 hover:text-pink-600 dark:text-zinc-100 dark:hover:text-pink-400"
+                                  >
+                                    {paper.title}
+                                  </a>
+                                  {paper.authors.length > 0 && (
+                                    <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                                      {paper.authors.slice(0, 3).join(", ")}
+                                      {paper.authors.length > 3 && ` +${paper.authors.length - 3} more`}
+                                    </p>
+                                  )}
+                                  {paper.categories.length > 0 && (
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {paper.categories.slice(0, 3).map((cat) => (
+                                        <span key={cat} className="rounded-full bg-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
+                                          {cat}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {alreadyInLibrary && (
+                                    <span className="mt-1 inline-block text-[10px] text-green-600 dark:text-green-400">Already in library</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {!savedToLibraryMessageIndices.has(i) && (chatPaperSelections[i]?.size ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => saveSelectedChatPapers(i, msg.papers!)}
+                            className="mt-2 w-full rounded-lg border border-pink-300 bg-pink-50 px-3 py-2 text-sm font-medium text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-950/40 dark:text-pink-300 dark:hover:bg-pink-950/60"
+                          >
+                            Add {chatPaperSelections[i].size} selected paper{chatPaperSelections[i].size !== 1 ? "s" : ""} to library
+                          </button>
+                        )}
+                        {savedToLibraryMessageIndices.has(i) && (
+                          <div className="mt-2 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-800 dark:bg-green-950/30 dark:text-green-400">
+                            <span>✓</span>
+                            <span>Added to library</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Fallback: old-style save for messages without structured papers */}
+                    {(!msg.papers || msg.papers.length === 0) && extractPapersFromText(msg.text).length > 0 && (
                       savedToLibraryMessageIndices.has(i) ? (
                         <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400">
                           <span className="shrink-0 text-green-600 dark:text-green-400">✓</span>
